@@ -4,7 +4,7 @@ set -e
 
 PROJECT_ID="gd-gcp-internship-devops"
 SERVICE_ACCOUNT_NAME="terraform-sa-njakov"
-KEY_FILE="gcp-key.json"
+KEY_FILE="$HOME/.gcp/terraform-gcp-key.json"
 
 USER_EMAIL="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
@@ -48,5 +48,5 @@ echo "All done!"
 echo "Your service account key is saved as '${KEY_FILE}'."
 echo ""
 echo "To authenticate your local terminal, run this command:"
-echo "export GOOGLE_APPLICATION_CREDENTIALS=\"$(pwd)/${KEY_FILE}\""
+echo "export GOOGLE_APPLICATION_CREDENTIALS=\"${KEY_FILE}\""
 
