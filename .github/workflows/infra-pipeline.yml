@@ -1,0 +1,113 @@
+name: Infrastructure Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+    paths: [ "environments/dev/**", "modules/**" ]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+        - plan
+        - apply
+        - destroy
+
+# Best Practice: Concurrency ensures only 1 job runs at a time per branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # --- Job 1: Code Quality & Security ---
+  validate_and_scan:
+    name: Validate & Scan
+    runs-on: self-hosted # Uses your private runner
+    defaults:
+      run:
+        working-directory: environments/dev
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive ../../
+        continue-on-error: false # Fail if code isn't formatted
+
+      - name: Terraform Init
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Run TFLint (Linter)
+        run: tflint --init && tflint
+
+      - name: Run TFSec (Security Scanner)
+        run: tfsec .
+
+  # --- Job 2: Plan ---
+  plan:
+    name: Terraform Plan
+    needs: validate_and_scan
+    runs-on: self-hosted
+    # Run on push, OR if manually triggered for 'plan'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.action == 'plan')
+    defaults:
+      run:
+        working-directory: environments/dev
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        # Best Practice: -lock-timeout prevents instant failure if state is briefly locked
+        run: terraform plan -out=tfplan -lock-timeout=5m
+
+  # --- Job 3: Apply (Manual Trigger Requirement) ---
+  apply:
+    name: Terraform Apply
+    needs: validate_and_scan
+    runs-on: self-hosted
+    # STRICT RULE: Only runs if you manually select "apply"
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
+    environment: production # Adds GitHub UI protection (optional)
+    defaults:
+      run:
+        working-directory: environments/dev
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -lock-timeout=5m
+
+  # --- Job 4: Destroy (Manual Trigger Requirement) ---
+  destroy:
+    name: Terraform Destroy
+    needs: validate_and_scan
+    runs-on: self-hosted
+    # STRICT RULE: Only runs if you manually select "destroy"
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
+    environment: production
+    defaults:
+      run:
+        working-directory: environments/dev
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Destroy
+        run: terraform destroy -auto-approve

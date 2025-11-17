@@ -47,3 +47,18 @@ resource "google_compute_router_nat" "nat" {
     source_ip_ranges_to_nat = ["ALL_IP_RANGES"]
   }
 }
+
+resource "google_compute_firewall" "allow_iap_ssh" {
+  project = var.project_id
+  name    = "${var.network_name}-allow-iap-ssh"
+  network = google_compute_network.main.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  # This specific IP range is owned by Google IAP. 
+  # Only traffic from this range allows you to use the "Tunnel through IAP" feature.
+  source_ranges = ["35.235.240.0/20"]
+}

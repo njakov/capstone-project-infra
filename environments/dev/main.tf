@@ -41,3 +41,14 @@ module "cloud_sql" {
   # This module needs to run after the network is created
   depends_on = [module.network]
 }
+
+
+module "runner" {
+  source = "../../modules/runner"
+
+  project_id   = var.project_id
+  env          = "dev"
+  zone         = "${var.region}-b"
+  network_name = module.network.network_name
+  subnet_id    = module.network.subnet_id
+}
