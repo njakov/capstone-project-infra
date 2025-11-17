@@ -34,6 +34,11 @@ resource "google_container_cluster" "primary" {
   name     = var.cluster_name
   location = var.region # This makes it a Regional cluster (High Availability)
 
+  resource_labels = {
+    environment = "dev"
+    app         = "petclinic"
+  }
+
   # Best Practice: Remove the default (unmanaged) node pool
   remove_default_node_pool = true
   initial_node_count       = 1
@@ -93,9 +98,16 @@ resource "google_container_node_pool" "primary_nodes" {
     max_node_count = var.max_node_count
   }
 
+  management {
+    auto_repair  = true
+    auto_upgrade = true
+  }
+
   # Node configuration
   node_config {
     machine_type = "e2-medium" # Good, cost-effective default
+    # Use the secure Container-Optimized OS (COS) image
+    image_type   = "COS_CONTAINERD"
 
     # Use the dedicated SA you created
     service_account = google_service_account.gke_node_sa.email

@@ -1,0 +1,3 @@
+exclude:
+  # Deprecated: PSP was removed in K8s v1.25. We use Pod Security Admission.
+  - google-gke-enforce-pod-security-policy
