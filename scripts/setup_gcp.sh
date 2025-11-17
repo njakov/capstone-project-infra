@@ -9,7 +9,7 @@ chmod +x create-bucket.sh
 ./create-bucket.sh
 
 echo "Executing create-service-account.sh..."
-chmod +x create-service-account.sh
-./create-service-account.sh
+chmod +x setup-terraform-sa.sh
+./setup-terraform-sa.sh
 
 echo "All setup scripts have been executed successfully!"
