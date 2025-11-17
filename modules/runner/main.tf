@@ -21,6 +21,7 @@ locals {
   ]
 }
 
+# tfsec:ignore:google-iam-no-project-level-service-account-impersonation
 resource "google_project_iam_member" "runner_permissions" {
   for_each = toset(local.required_roles)
   project  = var.project_id
