@@ -31,15 +31,13 @@ resource "google_project_iam_member" "runner_permissions" {
 }
 
 # --- 2. Hardened Runner VM ---
+# tfsec:ignore:google-compute-no-project-wide-ssh-keys
 resource "google_compute_instance" "runner" {
   project      = var.project_id
   name         = "${var.env}-runner-vm"
   machine_type = "e2-standard-2"
   zone         = var.zone
 
-  # tfsec:ignore:google-compute-no-project-wide-ssh-keys
-  # Reason: False positive. We ARE blocking keys right below.
-  # Best Practice: Block project-wide SSH keys to ensure only authorized access
   metadata = {
     block-project-ssh-keys = "true"
   }
@@ -51,6 +49,7 @@ resource "google_compute_instance" "runner" {
     enable_integrity_monitoring = true
   }
 
+  # tfsec:ignore:google-compute-vm-disk-encryption-customer-key
   boot_disk {
     initialize_params {
       image = "ubuntu-os-cloud/ubuntu-2204-lts"

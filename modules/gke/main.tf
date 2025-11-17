@@ -28,7 +28,6 @@ resource "google_project_iam_member" "node_sa_image_puller" {
 
 # --- The GKE Cluster Resource ---
 # tfsec:ignore:google-gke-enforce-pod-security-policy
-# Reason: PodSecurityPolicy is deprecated and removed in K8s v1.25+.
 resource "google_container_cluster" "primary" {
   project  = var.project_id
   name     = var.cluster_name
@@ -118,8 +117,6 @@ resource "google_container_node_pool" "primary_nodes" {
       disable-legacy-endpoints = "true"
     }
 
-    # --- FIX for Result #3 & #4: Enforce Workload Identity ---
-    # This prevents pods from using the Node's Service Account credentials
     workload_metadata_config {
       mode = "GKE_METADATA"
     }
