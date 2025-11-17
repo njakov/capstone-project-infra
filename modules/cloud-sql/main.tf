@@ -21,7 +21,7 @@ resource "google_compute_global_address" "private_ip_range" {
 # --- 3. Create the VPC Peering Connection ---
 resource "google_service_networking_connection" "private_vpc_connection" {
   # REMOVED: project = var.project_id (Not allowed here)
-  
+
   network                 = "projects/${var.project_id}/global/networks/${var.network_name}"
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.private_ip_range.name]
@@ -42,7 +42,7 @@ resource "google_secret_manager_secret" "db_password_secret" {
 
   # UPDATED SYNTAX for Provider v5.0+
   replication {
-    auto {}  # This replaces 'automatic = true'
+    auto {} # This replaces 'automatic = true'
   }
 }
 
@@ -57,21 +57,21 @@ resource "google_sql_database_instance" "main" {
   name                = var.db_instance_name
   database_version    = "MYSQL_8_0"
   region              = var.region
-  deletion_protection = true 
+  deletion_protection = true
 
   settings {
     tier = var.db_tier
 
     ip_configuration {
-      ipv4_enabled    = false 
+      ipv4_enabled    = false
       private_network = "projects/${var.project_id}/global/networks/${var.network_name}"
     }
 
     backup_configuration {
       enabled            = true
-      binary_log_enabled = true 
+      binary_log_enabled = true
     }
-    
+
   }
 
   root_password = random_password.db_password.result

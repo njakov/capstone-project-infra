@@ -50,16 +50,16 @@ resource "google_container_cluster" "primary" {
   # 1. Make it a private cluster
   private_cluster_config {
     enable_private_nodes    = true
-    enable_private_endpoint = true # No public control plane endpoint
+    enable_private_endpoint = true            # No public control plane endpoint
     master_ipv4_cidr_block  = "172.16.0.0/28" # Small, internal-only range
   }
 
-    master_authorized_networks_config {
-        cidr_blocks {
-        display_name = "private-subnet"
-        cidr_block   = var.subnet_ip_cidr_range
-        }
+  master_authorized_networks_config {
+    cidr_blocks {
+      display_name = "private-subnet"
+      cidr_block   = var.subnet_ip_cidr_range
     }
+  }
 
   # 2. Enable Workload Identity (for secure pod-to-GCP auth)
   workload_identity_config {
