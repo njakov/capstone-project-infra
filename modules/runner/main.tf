@@ -24,6 +24,8 @@ locals {
 resource "google_project_iam_member" "runner_permissions" {
   for_each = toset(local.required_roles)
   project  = var.project_id
+  # tfsec:ignore:google-iam-no-project-level-service-account-impersonation
+  # Reason: Terraform Runner needs to attach Service Accounts to the resources it creates.
   role     = each.value
   member   = "serviceAccount:${google_service_account.runner_sa.email}"
 }
@@ -35,6 +37,8 @@ resource "google_compute_instance" "runner" {
   machine_type = "e2-standard-2"
   zone         = var.zone
 
+  # tfsec:ignore:google-compute-no-project-wide-ssh-keys
+  # Reason: False positive. We ARE blocking keys right below.
   # Best Practice: Block project-wide SSH keys to ensure only authorized access
   metadata = {
     block-project-ssh-keys = "true"

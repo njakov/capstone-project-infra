@@ -14,6 +14,12 @@ resource "google_compute_subnetwork" "private" {
   network                  = google_compute_network.main.id
   private_ip_google_access = true # Crucial for GKE and internal services
 
+  log_config {
+    aggregation_interval = "INTERVAL_10_MIN"
+    flow_sampling        = 0.5
+    metadata             = "INCLUDE_ALL_METADATA"
+  }
+
   # Define secondary ranges GKE will use
   secondary_ip_range {
     range_name    = "pods"
