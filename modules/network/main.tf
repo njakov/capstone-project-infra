@@ -59,6 +59,6 @@ resource "google_compute_firewall" "allow_iap_ssh" {
   }
 
   # This specific IP range is owned by Google IAP. 
-  # Only traffic from this range allows you to use the "Tunnel through IAP" feature.
+  # tfsec:ignore:google-compute-no-public-ingress
   source_ranges = ["35.235.240.0/20"]
 }
