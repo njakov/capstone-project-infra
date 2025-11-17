@@ -37,7 +37,7 @@ module "cloud_sql" {
 
   # --- STITCHING: Connect the DB to the Network module's output ---
   network_name = module.network.network_name
-  
+
   # This module needs to run after the network is created
   depends_on = [module.network]
 }
