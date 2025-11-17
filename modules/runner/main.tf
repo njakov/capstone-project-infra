@@ -26,8 +26,8 @@ resource "google_project_iam_member" "runner_permissions" {
   project  = var.project_id
   # tfsec:ignore:google-iam-no-project-level-service-account-impersonation
   # Reason: Terraform Runner needs to attach Service Accounts to the resources it creates.
-  role     = each.value
-  member   = "serviceAccount:${google_service_account.runner_sa.email}"
+  role   = each.value
+  member = "serviceAccount:${google_service_account.runner_sa.email}"
 }
 
 # --- 2. Hardened Runner VM ---
