@@ -33,6 +33,12 @@ resource "google_container_cluster" "primary" {
   name     = var.cluster_name
   location = var.region # This makes it a Regional cluster (High Availability)
 
+  node_config {
+    metadata = {
+      disable-legacy-endpoints = true
+    }
+  }
+
   resource_labels = {
     environment = "dev"
     app         = "petclinic"
@@ -104,6 +110,11 @@ resource "google_container_node_pool" "primary_nodes" {
 
   # Node configuration
   node_config {
+
+    metadata = {
+      disable-legacy-endpoints = true
+    }
+
     machine_type = "e2-medium" # Good, cost-effective default
     # Use the secure Container-Optimized OS (COS) image
     image_type = "COS_CONTAINERD"
@@ -113,9 +124,6 @@ resource "google_container_node_pool" "primary_nodes" {
     oauth_scopes = [
       "https://www.googleapis.com/auth/cloud-platform"
     ]
-    metadata = {
-      disable-legacy-endpoints = "true"
-    }
 
     workload_metadata_config {
       mode = "GKE_METADATA"

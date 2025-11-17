@@ -5,10 +5,10 @@ resource "google_service_account" "runner_sa" {
   display_name = "GitHub Runner Service Account"
 }
 
-# List of specific roles needed to provision the Capstone Infrastructure
 # This replaces the insecure "roles/editor"
 locals {
   required_roles = [
+    "roles/compute.instanceAdmin.v1",
     "roles/compute.networkAdmin",             # To manage VPC/NAT/Firewalls
     "roles/container.admin",                  # To manage GKE
     "roles/cloudsql.admin",                   # To manage Cloud SQL
@@ -69,40 +69,72 @@ resource "google_compute_instance" "runner" {
     scopes = ["cloud-platform"]
   }
 
-  # Best Practice: 'set -e' stops execution on error
   metadata_startup_script = <<-EOT
     #!/bin/bash
     set -e
 
-    # Prevent running if already installed
-    if [ -x "$(command -v terraform)" ]; then
-      echo "Tools already installed. Skipping."
-      exit 0
+    echo "Starting Runner Setup on $(hostname)..."
+
+    # 1. Install Base Dependencies
+    echo "Installing Base Dependencies..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y ca-certificates curl gnupg lsb-release unzip software-properties-common git jq wget apt-transport-https
+
+    # 2. Install Docker (Modern Keyring Method)
+    if ! command -v docker &> /dev/null; then
+      echo "Installing Docker..."
+      mkdir -p /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+      apt-get update
+      apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
     fi
 
-    echo "Installing dependencies..."
-    apt-get update
-    apt-get install -y ca-certificates curl gnupg lsb-release unzip software-properties-common git jq
+    # CRITICAL FIX: Allow ANY user to use Docker
+    chmod 666 /var/run/docker.sock
 
-    # Install Docker
-    mkdir -p /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-    $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-    apt-get update
-    apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-    usermod -aG docker ubuntu
+    # 3. Install Terraform
+    if ! command -v terraform &> /dev/null; then
+      echo "Installing Terraform..."
+      wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null
+      echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list
+      apt-get update
+      apt-get install -y terraform
+    fi
 
-    # Install Terraform (Pinned version recommended for production, using latest for capstone)
-    curl -fsSL https://apt.releases.hashicorp.com/gpg | apt-key add -
-    apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-    apt-get update && apt-get install -y terraform
+    # 4. NEW: Add Google Cloud SDK Repo & Install Kubectl
+    if ! command -v kubectl &> /dev/null; then
+      echo "Adding Google Cloud SDK Repo..."
+      # Add the GPG key
+      curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+      
+      # Add the repository source
+      echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee /etc/apt/sources.list.d/google-cloud-sdk.list
 
-    # Install Security Scanners (TFLint & TFSec)
+      # Update and Install
+      apt-get update
+      echo "Installing Kubectl and Auth Plugin..."
+      apt-get install -y google-cloud-cli google-cloud-cli-gke-gcloud-auth-plugin kubectl
+    fi
+
+    # 5. Install Helm
+    if ! command -v helm &> /dev/null; then
+      echo "Installing Helm..."
+      curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+    fi
+
+    # 6. Install Security Scanners
+    echo "Installing Scanners..."
     curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
     curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
 
-    echo "Installation complete. Ready for runner registration."
+    # 7. Configure Docker Auth
+    echo "Configuring Docker Auth..."
+    gcloud auth configure-docker --quiet
+
+    echo "✅ Installation Complete! Runner is ready."
   EOT
 
   tags = ["private-runner"]
