@@ -29,15 +29,17 @@ resource "google_service_networking_connection" "private_vpc_connection" {
 
 # --- 4. Generate a Random Password ---
 resource "random_password" "db_password" {
-  length           = 16
-  special          = true
-  override_special = "!#%&*()-_=+[]{}<>:?"
+  length      = 16
+  special     = true
+  min_upper   = 1
+  min_lower   = 4
+  min_numeric = 1
+
   keepers = {
-    # Changing this value forces a new password to be generated.
-    # Use today's date or any random string.
-    rotation_trigger = "rotate-2025-11-18"
+    rotate = "${timestamp()}"
   }
 }
+
 
 # --- 5. Store the Password in Secret Manager ---
 resource "google_secret_manager_secret" "db_password_secret" {
