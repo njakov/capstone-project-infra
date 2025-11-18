@@ -20,9 +20,9 @@ resource "google_project_iam_member" "node_sa_monitoring" {
   member  = google_service_account.gke_node_sa.member
 }
 
-resource "google_project_iam_member" "node_sa_image_puller" {
+resource "google_project_iam_member" "node_sa_artifact_registry" {
   project = var.project_id
-  role    = "roles/storage.objectViewer" # Allows pulling from GCR/GAR
+  role    = "roles/artifactregistry.reader"
   member  = google_service_account.gke_node_sa.member
 }
 
