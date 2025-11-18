@@ -31,6 +31,11 @@ resource "google_service_networking_connection" "private_vpc_connection" {
 resource "random_password" "db_password" {
   length  = 16
   special = true
+  keepers = {
+    # Changing this value forces a new password to be generated.
+    # Use today's date or any random string.
+    rotation_trigger = "rotate-2025-11-18"
+  }
 }
 
 # --- 5. Store the Password in Secret Manager ---
