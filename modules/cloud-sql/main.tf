@@ -29,8 +29,9 @@ resource "google_service_networking_connection" "private_vpc_connection" {
 
 # --- 4. Generate a Random Password ---
 resource "random_password" "db_password" {
-  length  = 16
-  special = true
+  length           = 16
+  special          = true
+  override_special = "!#%&*()-_=+[]{}<>:?"
   keepers = {
     # Changing this value forces a new password to be generated.
     # Use today's date or any random string.
@@ -94,4 +95,5 @@ resource "google_sql_user" "user" {
   instance = google_sql_database_instance.main.name
   name     = var.db_user
   password = random_password.db_password.result
+  host     = "%"
 }
