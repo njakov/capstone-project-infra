@@ -42,6 +42,13 @@ module "cloud_sql" {
   depends_on = [module.network]
 }
 
+module "artifact_registry" {
+  source = "../../modules/artifact-registry"
+
+  project_id    = var.project_id
+  region        = var.region
+  repository_id = "petclinic-repo-dev"
+}
 
 module "runner" {
   source = "../../modules/runner"

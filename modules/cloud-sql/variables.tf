@@ -33,6 +33,6 @@ variable "db_user" {
 variable "db_tier" {
   type        = string
   description = "The machine type for the instance."
-  default     = "db-f1-micro" # Good for 'dev' - cost effective.
+  default     = "db-f1-micro"
   # NOTE: For HA (regional), you must use 'db-g1-small' or larger.
 }

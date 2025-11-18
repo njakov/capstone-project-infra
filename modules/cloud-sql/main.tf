@@ -20,8 +20,6 @@ resource "google_compute_global_address" "private_ip_range" {
 
 # --- 3. Create the VPC Peering Connection ---
 resource "google_service_networking_connection" "private_vpc_connection" {
-  # REMOVED: project = var.project_id (Not allowed here)
-
   network                 = "projects/${var.project_id}/global/networks/${var.network_name}"
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.private_ip_range.name]
@@ -40,7 +38,6 @@ resource "google_secret_manager_secret" "db_password_secret" {
   project   = var.project_id
   secret_id = "${var.db_instance_name}-password"
 
-  # UPDATED SYNTAX for Provider v5.0+
   replication {
     auto {} # This replaces 'automatic = true'
   }

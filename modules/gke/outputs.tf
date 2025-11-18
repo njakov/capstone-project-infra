@@ -14,3 +14,15 @@ output "workload_identity_pool" {
   description = "The workload identity pool for the cluster."
   value       = google_container_cluster.primary.workload_identity_config[0].workload_pool
 }
+
+output "cluster_endpoint" {
+  description = "The IP address of the cluster master."
+  sensitive   = true
+  value       = google_container_cluster.primary.endpoint
+}
+
+output "cluster_ca_certificate" {
+  description = "The public certificate that is the root of trust for the cluster."
+  sensitive   = true
+  value       = google_container_cluster.primary.master_auth[0].cluster_ca_certificate
+}
