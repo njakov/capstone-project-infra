@@ -65,7 +65,7 @@ resource "kubernetes_secret" "db_credentials" {
     username = module.cloud_sql.db_user
     password = data.google_secret_manager_secret_version.db_password.secret_data
     # Construct the JDBC URL automatically
-    url      = "jdbc:mysql://${module.cloud_sql.private_ip_address}/${module.cloud_sql.db_name}"
+    url = "jdbc:mysql://${module.cloud_sql.private_ip_address}/${module.cloud_sql.db_name}"
   }
   depends_on = [module.gke]
 }
