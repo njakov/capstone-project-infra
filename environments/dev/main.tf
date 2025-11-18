@@ -50,13 +50,13 @@ module "artifact_registry" {
   repository_id = "petclinic-repo-dev"
 }
 
-# 1. Get the secret payload (the actual password string)
+# 1. Get the latest version of the secret by NAME
 data "google_secret_manager_secret_version" "db_password" {
-  secret  = module.cloud_sql.db_password_secret_version_id # You already output this!
+  secret  = module.cloud_sql.secret_id # <--- Passing the name here
   project = var.project_id
 }
 
-# 2. Create a K8s Secret (The App will read this)
+# 2. Use it
 resource "kubernetes_secret" "db_credentials" {
   metadata {
     name = "db-credentials"
@@ -64,8 +64,7 @@ resource "kubernetes_secret" "db_credentials" {
   data = {
     username = module.cloud_sql.db_user
     password = data.google_secret_manager_secret_version.db_password.secret_data
-    # Construct the JDBC URL automatically
-    url = "jdbc:mysql://${module.cloud_sql.private_ip_address}/${module.cloud_sql.db_name}"
+    url      = "jdbc:mysql://${module.cloud_sql.private_ip_address}/${module.cloud_sql.db_name}"
   }
   depends_on = [module.gke]
 }

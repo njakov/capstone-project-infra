@@ -15,9 +15,9 @@ output "db_user" {
   value       = google_sql_user.user.name
 }
 
-output "db_password_secret_version_id" {
-  description = "The ID of the Secret Manager secret containing the DB password."
-  value       = google_secret_manager_secret_version.db_password_version.id
+output "secret_id" {
+  description = "The simple name of the secret (e.g., 'petclinic-db-dev-password')"
+  value       = google_secret_manager_secret.db_password_secret.secret_id
 }
 
 output "private_ip_address" {
