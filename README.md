@@ -1,5 +1,5 @@
 Advanced Capstone Project
-Components:
+Components
 Infrastructure Automation
 Use Terraform to provision a scalable Kubernetes-based architecture.
 Introduce Load Balancers and HA configurations.
