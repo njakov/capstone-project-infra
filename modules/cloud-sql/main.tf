@@ -38,21 +38,6 @@ resource "random_password" "db_password" {
   }
 }
 
-# --- 5. Store the Password in Secret Manager ---
-resource "google_secret_manager_secret" "db_password_secret" {
-  project   = var.project_id
-  secret_id = "${var.db_instance_name}-password"
-
-  replication {
-    auto {} # This replaces 'automatic = true'
-  }
-}
-
-resource "google_secret_manager_secret_version" "db_password_version" {
-  secret      = google_secret_manager_secret.db_password_secret.id
-  secret_data = random_password.db_password.result
-}
-
 # --- 6. The Cloud SQL Instance ---
 resource "google_sql_database_instance" "main" {
   project             = var.project_id
