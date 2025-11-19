@@ -13,11 +13,11 @@ resource "helm_release" "csi_driver" {
 
 # --- 2. GCP Provider for CSI Driver (Final, Correct Configuration) ---
 resource "helm_release" "csi_gcp_provider" {
-  name       = "secrets-store-csi-driver-provider-gcp"
-  
+  name = "secrets-store-csi-driver-provider-gcp"
+
   # CRITICAL FIX: The correct URL for the Helm chart index.
-  repository = "https://googlecloudplatform.github.io/secrets-store-csi-driver-provider-gcp/" 
-  
+  repository = "https://googlecloudplatform.github.io/secrets-store-csi-driver-provider-gcp/"
+
   # The chart name is confirmed to be the full name based on the uploaded source code.
   chart      = "secrets-store-csi-driver-provider-gcp"
   version    = "1.4.2"
