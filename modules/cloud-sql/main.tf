@@ -48,11 +48,10 @@ resource "google_sql_database_instance" "main" {
 
   settings {
     tier = var.db_tier
-
+    #tfsec:ignore:google-sql-encrypt-in-transit-data
     ip_configuration {
       ipv4_enabled    = false
       private_network = "projects/${var.project_id}/global/networks/${var.network_name}"
-      #tfsec:ignore:google-sql-encrypt-in-transit-data
       ssl_mode = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
     }
 
