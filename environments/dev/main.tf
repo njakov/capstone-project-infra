@@ -50,13 +50,6 @@ module "artifact_registry" {
   repository_id = "petclinic-repo-dev"
 }
 
-# 1. Get the latest version of the secret by NAME
-data "google_secret_manager_secret_version" "db_password" {
-  secret  = module.cloud_sql.secret_id # <--- Passing the name here
-  project = var.project_id
-}
-
-
 # --- 1. Dedicated Namespace ---
 resource "kubernetes_namespace" "petclinic" {
   metadata {
