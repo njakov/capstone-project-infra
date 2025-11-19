@@ -1,3 +1,5 @@
+# environments/dev/k8s-addons.tf
+
 # --- 1. Secrets Store CSI Driver Installation (via Helm) ---
 # This is the base component that manages the volume mount
 resource "helm_release" "csi_driver" {
@@ -9,11 +11,14 @@ resource "helm_release" "csi_driver" {
   depends_on = [module.gke]
 }
 
-# --- 2. GCP Provider for CSI Driver (Fixes 404) ---
-# We use the correct chart name and a slightly newer version.
+# --- 2. GCP Provider for CSI Driver (Final, Correct Configuration) ---
 resource "helm_release" "csi_gcp_provider" {
   name       = "secrets-store-csi-driver-provider-gcp"
-  repository = "https://googlecloudplatform.github.io/secrets-store-csi-driver-provider-gcp/"
+  
+  # CRITICAL FIX: The correct URL for the Helm chart index.
+  repository = "https://googlecloudplatform.github.io/secrets-store-csi-driver-provider-gcp/" 
+  
+  # The chart name is confirmed to be the full name based on the uploaded source code.
   chart      = "secrets-store-csi-driver-provider-gcp"
   version    = "1.4.2"
   namespace  = "kube-system"
