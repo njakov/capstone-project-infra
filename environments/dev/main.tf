@@ -50,11 +50,9 @@ module "artifact_registry" {
   repository_id = "petclinic-repo-dev"
 }
 
-# 1. Get the latest version of the secret by NAME
 data "google_secret_manager_secret_version" "db_password" {
   secret  = module.cloud_sql.secret_id # <--- Passing the name here
   project = var.project_id
-  version = "latest"
 }
 
 # 2. Use it
@@ -64,7 +62,7 @@ resource "kubernetes_secret" "db_credentials" {
   }
   data = {
     username = module.cloud_sql.db_user
-    password = data.google_secret_manager_secret_version.db_password.secret_data
+    password = module.cloud_sql.db_password_plain
     url      = "jdbc:mysql://${module.cloud_sql.private_ip_address}/${module.cloud_sql.db_name}"
   }
   depends_on = [module.gke]
