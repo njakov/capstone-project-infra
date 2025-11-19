@@ -2,7 +2,7 @@ name: Infrastructure Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "secrets-management" ]
     paths: [ "environments/dev/**", "modules/**", ".github/workflows/infra-pipeline.yml" ]
   workflow_dispatch:
     inputs:
