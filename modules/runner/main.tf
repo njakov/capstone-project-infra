@@ -17,7 +17,8 @@ locals {
     "roles/resourcemanager.projectIamAdmin",   # To grant IAM bindings
     "roles/storage.objectAdmin",               # To read/write Terraform State
     "roles/serviceusage.serviceUsageConsumer", # To enable APIs
-    "roles/artifactregistry.writer"            # To push images to Artifact Registry
+    "roles/artifactregistry.writer",
+    "roles/iam.serviceAccountAdmin"
   ]
 }
 

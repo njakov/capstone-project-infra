@@ -13,7 +13,7 @@ resource "helm_release" "csi_driver" {
 # We use the correct chart name and a slightly newer version.
 resource "helm_release" "csi_gcp_provider" {
   name       = "secrets-store-csi-driver-provider-gcp"
-  repository = "https://kubernetes-sigs.github.io/secrets-store-csi-driver-provider-gcp"
+  repository = "https://googlecloudplatform.github.io/secrets-store-csi-driver-provider-gcp/"
   chart      = "secrets-store-csi-driver-provider-gcp"
   version    = "1.4.2"
   namespace  = "kube-system"
