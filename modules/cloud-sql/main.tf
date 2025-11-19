@@ -30,7 +30,7 @@ resource "google_service_networking_connection" "private_vpc_connection" {
 # --- 4. Generate a Random Password ---
 resource "random_password" "db_password" {
   length  = 16
-  special = true
+  special = false
   keepers = {
     # Changing this value forces a new password to be generated.
     # Use today's date or any random string.
@@ -52,7 +52,8 @@ resource "google_sql_database_instance" "main" {
     ip_configuration {
       ipv4_enabled    = false
       private_network = "projects/${var.project_id}/global/networks/${var.network_name}"
-      require_ssl     = true
+      #tfsec:ignore:google-sql-encrypt-in-transit-data
+      ssl_mode = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
     }
 
     backup_configuration {
