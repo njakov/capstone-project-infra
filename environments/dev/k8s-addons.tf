@@ -9,11 +9,11 @@ resource "helm_release" "csi_driver" {
   depends_on = [module.gke]
 }
 
-# --- 2. GCP Provider for CSI Driver ---
-# This is the specific connector that allows the CSI driver to talk to Google Secret Manager
+# --- 2. GCP Provider for CSI Driver (Fixes 404) ---
+# We use the correct chart name and a slightly newer version.
 resource "helm_release" "csi_gcp_provider" {
   name       = "secrets-store-csi-driver-provider-gcp"
-  repository = "https://kubernetes-sigs.github.io/secrets-store-csi-driver-provider-gcp/charts"
+  repository = "https://kubernetes-sigs.github.io/secrets-store-csi-driver-provider-gcp"
   chart      = "secrets-store-csi-driver-provider-gcp"
   version    = "1.4.2"
   namespace  = "kube-system"

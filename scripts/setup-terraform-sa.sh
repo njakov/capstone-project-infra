@@ -53,6 +53,7 @@ ROLES_TO_GRANT=(
   # For Enabling APIs & Managing Other SAs
   "roles/serviceusage.serviceUsageConsumer"
   "roles/iam.serviceAccountAdmin"
+  "roles/iam.serviceAccountCreator"
 
   # For granting IAM permissions (the fix from our last step)
   "roles/resourcemanager.projectIamAdmin"
