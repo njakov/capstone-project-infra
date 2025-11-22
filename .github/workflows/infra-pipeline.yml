@@ -46,7 +46,7 @@ jobs:
         continue-on-error: false # Fail if code isn't formatted
 
       - name: Terraform Init
-        run: terraform init -backend=false
+        run: terraform init -upgrade -backend=false
 
       - name: Terraform Validate
         run: terraform validate
