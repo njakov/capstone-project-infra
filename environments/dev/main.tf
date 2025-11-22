@@ -63,21 +63,6 @@ resource "google_service_account_iam_member" "workload_identity_binding" {
   member             = "serviceAccount:${var.project_id}.svc.id.goog[default/petclinic-sa]"
 }
 
-# 4. Update the DB Credentials Secret
-# CHANGE: The URL now points to localhost because the Proxy listens on 127.0.0.1
-resource "kubernetes_secret" "db_credentials" {
-  metadata {
-    name = "db-credentials"
-  }
-  data = {
-    username = module.cloud_sql.db_user
-    password = module.cloud_sql.db_password_plain
-    # The proxy listens on localhost:3306 by default
-    url = "jdbc:mysql://127.0.0.1:3306/${module.cloud_sql.db_name}"
-  }
-  depends_on = [module.gke]
-}
-
 module "artifact_registry" {
   source = "../../modules/artifact-registry"
 
@@ -94,4 +79,52 @@ module "runner" {
   zone         = "${var.region}-b"
   network_name = module.network.network_name
   subnet_id    = module.network.subnet_id
+}
+
+# Create Secrets in Google Secret Manager
+resource "google_secret_manager_secret" "db_username" {
+  project   = var.project_id
+  secret_id = "petclinic-db-username"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "db_username_val" {
+  secret      = google_secret_manager_secret.db_username.id
+  secret_data = module.cloud_sql.db_user
+}
+
+resource "google_secret_manager_secret" "db_password" {
+  project   = var.project_id
+  secret_id = "petclinic-db-password"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "db_password_val" {
+  secret      = google_secret_manager_secret.db_password.id
+  secret_data = module.cloud_sql.db_password_plain
+}
+
+resource "google_secret_manager_secret" "db_url" {
+  project   = var.project_id
+  secret_id = "petclinic-db-url"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "db_url_val" {
+  secret = google_secret_manager_secret.db_url.id
+  # Construct the URL just like you did before
+  secret_data = "jdbc:mysql://127.0.0.1:3306/${module.cloud_sql.db_name}"
+}
+
+# Grant the Google Service Account access to Secret Manager
+resource "google_project_iam_member" "secret_accessor" {
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.petclinic_sa.email}"
 }
