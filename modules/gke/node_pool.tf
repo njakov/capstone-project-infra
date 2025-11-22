@@ -2,7 +2,7 @@
 
 resource "google_container_node_pool" "primary_nodes" {
   project            = var.project_id
-  name               = "primary-pool"
+  name               = var.node_pool_name
   location           = var.region
   cluster            = google_container_cluster.primary.id
   initial_node_count = var.min_node_count
@@ -13,16 +13,16 @@ resource "google_container_node_pool" "primary_nodes" {
   }
 
   management {
-    auto_repair  = true
-    auto_upgrade = true
+    auto_repair  = var.auto_repair
+    auto_upgrade = var.auto_upgrade
   }
 
   node_config {
     machine_type = var.machine_type
     disk_type    = var.disk_type
     disk_size_gb = var.disk_size_gb
-
-    image_type = "COS_CONTAINERD"
+    tags = var.node_tags
+    image_type = var.image_type
 
     service_account = google_service_account.gke_node_sa.email
 
@@ -39,8 +39,8 @@ resource "google_container_node_pool" "primary_nodes" {
     }
 
     shielded_instance_config {
-      enable_secure_boot          = true
-      enable_integrity_monitoring = true
+      enable_secure_boot          = var.enable_secure_boot
+      enable_integrity_monitoring = var.enable_integrity_monitoring
     }
 
     labels = {
