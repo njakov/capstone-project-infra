@@ -124,6 +124,7 @@ resource "google_container_node_pool" "primary_nodes" {
     # Use the secure Container-Optimized OS (COS) image
     image_type   = "COS_CONTAINERD"
     disk_size_gb = 50
+    disk_type    = "pd-standard"
 
     # Use the dedicated SA you created
     service_account = google_service_account.gke_node_sa.email
