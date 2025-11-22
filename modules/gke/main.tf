@@ -87,6 +87,11 @@ resource "google_container_cluster" "primary" {
   network_policy {
     enabled = true
   }
+
+  secret_manager_config {
+    enabled = true
+  }
+
 }
 
 # --- Best Practice: Managed, Autoscaling Node Pool ---

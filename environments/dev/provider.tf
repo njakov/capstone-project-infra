@@ -1,18 +1,18 @@
 terraform {
-  required_version = "~> 1.13.0"
+  required_version = "1.14.1"
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = "~> 5.0"
+      version = "7.12.0"
     }
     helm = {
       source  = "hashicorp/helm"
-      version = "~> 2.12"
+      version = "3.1.1"
     }
     # Recommended to keep for flexibility
     kubernetes = {
       source  = "hashicorp/kubernetes"
-      version = "~> 2.23"
+      version = "2.38.0"
     }
   }
 }
