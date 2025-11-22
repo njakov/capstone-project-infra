@@ -2,7 +2,7 @@ name: Infrastructure Pipeline
 
 on:
   push:
-    branches: [ "main", "secret-management" ]
+    branches: [ "main", "secret-management", "adding-auth-proxy" ]
     paths: [ "environments/dev/**", "modules/**", ".github/workflows/infra-pipeline.yml" ]
   workflow_dispatch:
     inputs:
