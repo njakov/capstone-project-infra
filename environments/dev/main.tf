@@ -86,19 +86,6 @@ module "artifact_registry" {
   repository_id = "petclinic-repo-dev"
 }
 
-# 2. Use it
-resource "kubernetes_secret" "db_credentials" {
-  metadata {
-    name = "db-credentials"
-  }
-  data = {
-    username = module.cloud_sql.db_user
-    password = module.cloud_sql.db_password_plain
-    url      = "jdbc:mysql://${module.cloud_sql.private_ip_address}/${module.cloud_sql.db_name}"
-  }
-  depends_on = [module.gke]
-}
-
 module "runner" {
   source = "../../modules/runner"
 
