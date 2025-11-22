@@ -26,3 +26,8 @@ output "cluster_ca_certificate" {
   sensitive   = true
   value       = google_container_cluster.primary.master_auth[0].cluster_ca_certificate
 }
+
+output "node_service_account_email" {
+  description = "The email of the Service Account used by the GKE nodes."
+  value       = google_service_account.gke_node_sa.email
+}
