@@ -42,6 +42,42 @@ module "cloud_sql" {
   depends_on = [module.network]
 }
 
+resource "google_service_account" "petclinic_sa" {
+  project      = var.project_id
+  account_id   = "petclinic-app-sa"
+  display_name = "Petclinic Application Service Account"
+}
+
+# 2. Grant Cloud SQL Client role to the GSA
+resource "google_project_iam_member" "petclinic_sql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.petclinic_sa.email}"
+}
+
+# 3. Bind the GSA to the Kubernetes Service Account (Workload Identity)
+# Note: We assume the K8s namespace is "default" and KSA name is "petclinic-sa"
+resource "google_service_account_iam_member" "workload_identity_binding" {
+  service_account_id = google_service_account.petclinic_sa.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[default/petclinic-sa]"
+}
+
+# 4. Update the DB Credentials Secret
+# CHANGE: The URL now points to localhost because the Proxy listens on 127.0.0.1
+resource "kubernetes_secret" "db_credentials" {
+  metadata {
+    name = "db-credentials"
+  }
+  data = {
+    username = module.cloud_sql.db_user
+    password = module.cloud_sql.db_password_plain
+    # The proxy listens on localhost:3306 by default
+    url = "jdbc:mysql://127.0.0.1:3306/${module.cloud_sql.db_name}"
+  }
+  depends_on = [module.gke]
+}
+
 module "artifact_registry" {
   source = "../../modules/artifact-registry"
 
