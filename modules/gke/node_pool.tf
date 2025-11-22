@@ -30,6 +30,10 @@ resource "google_container_node_pool" "primary_nodes" {
       "https://www.googleapis.com/auth/cloud-platform"
     ]
 
+    metadata = {
+      disable-legacy-endpoints = "true"
+    }
+
     workload_metadata_config {
       mode = "GKE_METADATA"
     }
@@ -37,10 +41,6 @@ resource "google_container_node_pool" "primary_nodes" {
     shielded_instance_config {
       enable_secure_boot          = true
       enable_integrity_monitoring = true
-    }
-
-    metadata = {
-      disable-legacy-endpoints = "true"
     }
 
     labels = {
