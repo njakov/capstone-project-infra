@@ -7,10 +7,12 @@ resource "helm_release" "ingress_nginx" {
   namespace        = "ingress-nginx"
   create_namespace = true
 
-  set = {
-    name  = "controller.service.type"
-    value = "LoadBalancer"
-  }
+  set = [
+    {
+      name  = "controller.service.type"
+      value = "LoadBalancer"
+    }
+  ]
 
   # Wait for the GKE cluster to be ready
   depends_on = [module.gke]
