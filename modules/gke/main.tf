@@ -33,6 +33,7 @@ resource "google_container_cluster" "primary" {
   networking_mode = "VPC_NATIVE"
   network         = var.network_name
   subnetwork      = var.subnet_id
+  deletion_protection = false
 
   ip_allocation_policy {
     cluster_secondary_range_name  = var.subnet_pods_range
