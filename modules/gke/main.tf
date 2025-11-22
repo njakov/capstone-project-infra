@@ -24,7 +24,6 @@ resource "google_project_iam_member" "node_sa_artifact_registry" {
   member  = google_service_account.gke_node_sa.member
 }
 
-# --- The GKE Cluster Resource ---
 # tfsec:ignore:google-gke-enable-network-policy
 # tfsec:ignore:google-gke-enforce-pod-security-policy
 resource "google_container_cluster" "primary" {
