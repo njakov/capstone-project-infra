@@ -27,12 +27,12 @@ resource "google_project_iam_member" "node_sa_artifact_registry" {
 # tfsec:ignore:google-gke-enable-network-policy
 # tfsec:ignore:google-gke-enforce-pod-security-policy
 resource "google_container_cluster" "primary" {
-  project         = var.project_id
-  name            = var.cluster_name
-  location        = var.region
-  networking_mode = "VPC_NATIVE"
-  network         = var.network_name
-  subnetwork      = var.subnet_id
+  project             = var.project_id
+  name                = var.cluster_name
+  location            = var.region
+  networking_mode     = "VPC_NATIVE"
+  network             = var.network_name
+  subnetwork          = var.subnet_id
   deletion_protection = false
 
   ip_allocation_policy {
