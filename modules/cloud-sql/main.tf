@@ -27,6 +27,12 @@ resource "google_service_networking_connection" "private_vpc_connection" {
   depends_on = [google_project_service.service_networking]
 }
 
+resource "google_project_service" "secret_manager" {
+  project                    = var.project_id
+  service                    = "secretmanager.googleapis.com"
+  disable_dependent_services = false
+}
+
 # --- 4. Generate a Random Password ---
 resource "random_password" "db_password" {
   length  = 16
