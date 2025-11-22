@@ -25,6 +25,7 @@ resource "google_project_iam_member" "node_sa_artifact_registry" {
 }
 
 # --- The GKE Cluster Resource ---
+# tfsec:ignore:google-gke-enable-network-policy
 # tfsec:ignore:google-gke-enforce-pod-security-policy
 resource "google_container_cluster" "primary" {
   project         = var.project_id
@@ -61,7 +62,6 @@ resource "google_container_cluster" "primary" {
   }
   #GKE Dataplane V2 comes with Kubernetes network policy enforcement built-in
   datapath_provider = "ADVANCED_DATAPATH"
-  # tfsec:ignore:google-gke-enable-network-policy
 
   remove_default_node_pool = true
   initial_node_count       = 1
