@@ -149,9 +149,14 @@ resource "google_secret_manager_secret_iam_member" "url_access" {
   member    = "serviceAccount:${var.app_service_account_email}"
 }
 
-resource "google_sql_database_instance_iam_member" "sql_client_role" {
-  project  = var.project_id
-  instance = google_sql_database_instance.main.name
-  role     = "roles/cloudsql.client"
-  member   = "serviceAccount:${var.app_service_account_email}"
+resource "google_project_iam_member" "sql_client_role" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${var.app_service_account_email}"
+
+  condition {
+    title       = "restrict-to-${google_sql_database_instance.main.name}"
+    description = "Allows connection only to the ${google_sql_database_instance.main.name} instance"
+    expression  = "resource.name == 'projects/${var.project_id}/instances/${google_sql_database_instance.main.name}' && resource.service == 'sqladmin.googleapis.com'"
+  }
 }
