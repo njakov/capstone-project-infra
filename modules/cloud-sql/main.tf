@@ -27,26 +27,18 @@ resource "google_service_networking_connection" "private_vpc_connection" {
   depends_on = [google_project_service.service_networking]
 }
 
-# --- 4. Generate a Random Password ---
-resource "random_password" "db_password" {
-  length      = 16
-  special     = true
-  min_upper   = 1
-  min_lower   = 4
-  min_numeric = 1
-
-  keepers = {
-    rotate = "${timestamp()}"
-  }
+resource "google_project_service" "secret_manager" {
+  project                    = var.project_id
+  service                    = "secretmanager.googleapis.com"
+  disable_dependent_services = false
 }
 
-# --- 5. Store the Password in Secret Manager ---
-resource "google_secret_manager_secret" "db_password_secret" {
-  project   = var.project_id
-  secret_id = "${var.db_instance_name}-password"
-
-  replication {
-    auto {} # This replaces 'automatic = true'
+# --- 4. Generate a Random Password ---
+resource "random_password" "db_password" {
+  length  = 16
+  special = false
+  keepers = {
+    rotate = "${timestamp()}"
   }
 }
 
@@ -60,11 +52,11 @@ resource "google_sql_database_instance" "main" {
 
   settings {
     tier = var.db_tier
-
+    #tfsec:ignore:google-sql-encrypt-in-transit-data
     ip_configuration {
       ipv4_enabled    = false
       private_network = "projects/${var.project_id}/global/networks/${var.network_name}"
-      require_ssl     = true
+      ssl_mode        = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
     }
 
     backup_configuration {

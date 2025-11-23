@@ -15,12 +15,13 @@ output "db_user" {
   value       = google_sql_user.user.name
 }
 
-output "secret_id" {
-  description = "The simple name of the secret (e.g., 'petclinic-db-dev-password')"
-  value       = google_secret_manager_secret.db_password_secret.secret_id
-}
-
 output "private_ip_address" {
   description = "The private IP address of the Cloud SQL instance"
   value       = google_sql_database_instance.main.private_ip_address
+}
+
+output "db_password_plain" {
+  description = "The application user's plain text password."
+  value       = random_password.db_password.result
+  sensitive   = true # Mark as sensitive to prevent logging in plaintext
 }

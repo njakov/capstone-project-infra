@@ -42,6 +42,27 @@ module "cloud_sql" {
   depends_on = [module.network]
 }
 
+resource "google_service_account" "petclinic_sa" {
+  project      = var.project_id
+  account_id   = "petclinic-app-sa"
+  display_name = "Petclinic Application Service Account"
+}
+
+# 2. Grant Cloud SQL Client role to the GSA
+resource "google_project_iam_member" "petclinic_sql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.petclinic_sa.email}"
+}
+
+# 3. Bind the GSA to the Kubernetes Service Account (Workload Identity)
+# Note: We assume the K8s namespace is "default" and KSA name is "petclinic-sa"
+resource "google_service_account_iam_member" "workload_identity_binding" {
+  service_account_id = google_service_account.petclinic_sa.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[default/petclinic-sa]"
+}
+
 module "artifact_registry" {
   source = "../../modules/artifact-registry"
 
@@ -49,46 +70,6 @@ module "artifact_registry" {
   region        = var.region
   repository_id = "petclinic-repo-dev"
 }
-
-# --- 1. Dedicated Namespace ---
-resource "kubernetes_namespace" "petclinic" {
-  metadata {
-    name = "petclinic-app" # Deploying to a separate namespace is best practice
-  }
-}
-
-# --- 2. Application Google Service Account (GSA) ---
-resource "google_service_account" "petclinic_gsa" {
-  account_id   = "petclinic-gsa"
-  display_name = "PetClinic GSA for Workload Identity"
-}
-
-# --- 3. Kubernetes Service Account (KSA) with Workload Identity Annotation ---
-resource "kubernetes_service_account" "petclinic_ksa" {
-  metadata {
-    name      = "petclinic-ksa"
-    namespace = kubernetes_namespace.petclinic.metadata[0].name
-    annotations = {
-      # This links the KSA to the GSA
-      "iam.gke.io/sa" = "petclinic-gsa@${var.project_id}.iam.gserviceaccount.com"
-    }
-  }
-}
-
-# --- 4. Workload Identity Binding (KSA can act as GSA) ---
-resource "google_service_account_iam_member" "workload_identity_binding" {
-  service_account_id = google_service_account.petclinic_gsa.name
-  role               = "roles/iam.workloadIdentityUser"
-  member             = "serviceAccount:${var.project_id}.svc.id.goog[${kubernetes_namespace.petclinic.metadata[0].name}/${kubernetes_service_account.petclinic_ksa.metadata[0].name}]"
-}
-
-# --- 5. Secret Reader Access (GSA can read the secret) ---
-resource "google_secret_manager_secret_iam_member" "secret_accessor" {
-  secret_id = module.cloud_sql.secret_id # The Secret Manager resource name
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.petclinic_gsa.email}"
-}
-
 
 module "runner" {
   source = "../../modules/runner"
@@ -98,4 +79,52 @@ module "runner" {
   zone         = "${var.region}-b"
   network_name = module.network.network_name
   subnet_id    = module.network.subnet_id
+}
+
+# Create Secrets in Google Secret Manager
+resource "google_secret_manager_secret" "db_username" {
+  project   = var.project_id
+  secret_id = "petclinic-db-username"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "db_username_val" {
+  secret      = google_secret_manager_secret.db_username.id
+  secret_data = module.cloud_sql.db_user
+}
+
+resource "google_secret_manager_secret" "db_password" {
+  project   = var.project_id
+  secret_id = "petclinic-db-password"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "db_password_val" {
+  secret      = google_secret_manager_secret.db_password.id
+  secret_data = module.cloud_sql.db_password_plain
+}
+
+resource "google_secret_manager_secret" "db_url" {
+  project   = var.project_id
+  secret_id = "petclinic-db-url"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "db_url_val" {
+  secret = google_secret_manager_secret.db_url.id
+  # Construct the URL just like you did before
+  secret_data = "jdbc:mysql://127.0.0.1:3306/${module.cloud_sql.db_name}"
+}
+
+# Grant the Google Service Account access to Secret Manager
+resource "google_project_iam_member" "secret_accessor" {
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.petclinic_sa.email}"
 }
