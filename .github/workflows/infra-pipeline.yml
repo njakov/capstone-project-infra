@@ -2,7 +2,7 @@ name: Infrastructure Pipeline
 
 on:
   push:
-    branches: [ "main", "best-practices"]
+    branches: [ "main", "best-practices" ]
     paths: [ "environments/dev/**", "modules/**", ".github/workflows/infra-pipeline.yml" ]
   workflow_dispatch:
     inputs:
@@ -95,7 +95,7 @@ jobs:
           key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
           restore-keys: |
             ${{ runner.os }}-terraform-
-              
+
       - name: Terraform Init
         run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
 
