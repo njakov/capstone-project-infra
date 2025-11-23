@@ -50,6 +50,7 @@ module "gke" {
 
   min_node_count = var.gke_min_nodes
   max_node_count = var.gke_max_nodes
+  machine_type   = var.gke_machine_type
 }
 
 module "artifact_registry" {
