@@ -38,7 +38,7 @@ resource "random_password" "db_password" {
   length  = 16
   special = false
   keepers = {
-    rotate = "${timestamp()}"
+    rotation_trigger = "rotate-2025-11-18"
   }
 }
 
