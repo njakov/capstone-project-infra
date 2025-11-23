@@ -17,6 +17,11 @@ resource "google_container_node_pool" "primary_nodes" {
     auto_upgrade = var.auto_upgrade
   }
 
+  upgrade_settings {
+    max_surge       = var.max_surge
+    max_unavailable = var.max_unavailable
+  }
+
   node_config {
     machine_type = var.machine_type
     disk_type    = var.disk_type

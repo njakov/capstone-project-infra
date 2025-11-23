@@ -53,6 +53,18 @@ variable "max_node_count" {
   default     = 3
 }
 
+variable "max_surge" {
+  description = "The number of additional nodes that can be added to the node pool during an upgrade."
+  type        = number
+  default     = 1
+}
+
+variable "max_unavailable" {
+  description = "The number of nodes that can be simultaneously unavailable during an upgrade."
+  type        = number
+  default     = 0
+}
+
 variable "subnet_ip_cidr_range" {
   type        = string
   description = "The primary IP range of the subnet (for master authorized networks)."
