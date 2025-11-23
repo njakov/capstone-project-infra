@@ -7,3 +7,4 @@ db_tier          = "db-f1-micro"
 gke_min_nodes    = 1
 gke_max_nodes    = 2
 gke_machine_type = "e2-standard-2"
+gke_maintenance_start_time = "03:00"

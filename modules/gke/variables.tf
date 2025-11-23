@@ -100,6 +100,12 @@ variable "auto_upgrade" {
   default     = true
 }
 
+variable "maintenance_start_time" {
+  description = "Time window specified for daily maintenance operations in UTC"
+  type        = string
+  default     = "03:00"
+}
+
 variable "labels" {
   type        = map(string)
   description = "GCP labels to apply to the cluster for billing and organization."

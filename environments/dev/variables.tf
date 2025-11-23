@@ -39,3 +39,9 @@ variable "db_tier" {
   description = "Database instance machine type"
   type        = string
 }
+
+variable "gke_maintenance_start_time" {
+  description = "Time window specified for daily maintenance operations in UTC"
+  type        = string
+  default     = "03:00"
+}

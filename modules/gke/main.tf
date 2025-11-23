@@ -53,6 +53,12 @@ resource "google_container_cluster" "primary" {
     }
   }
 
+  maintenance_policy {
+    daily_maintenance_window {
+      start_time = var.maintenance_start_time
+    }
+  }
+
   workload_identity_config {
     workload_pool = "${var.project_id}.svc.id.goog"
   }
