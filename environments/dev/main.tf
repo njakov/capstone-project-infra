@@ -48,9 +48,9 @@ module "gke" {
   subnet_services_range = module.network.subnet_services_range
   subnet_ip_cidr_range  = module.network.subnet_ip_cidr_range
 
-  min_node_count = var.gke_min_nodes
-  max_node_count = var.gke_max_nodes
-  machine_type   = var.gke_machine_type
+  min_node_count         = var.gke_min_nodes
+  max_node_count         = var.gke_max_nodes
+  machine_type           = var.gke_machine_type
   maintenance_start_time = var.gke_maintenance_start_time
 }
 
