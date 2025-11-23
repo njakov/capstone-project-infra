@@ -74,7 +74,7 @@ jobs:
       - uses: actions/checkout@v3
       
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
 
       - name: Terraform Plan
         # Best Practice: -lock-timeout prevents instant failure if state is briefly locked
