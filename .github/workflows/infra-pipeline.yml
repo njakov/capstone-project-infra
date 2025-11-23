@@ -30,16 +30,27 @@ jobs:
     name: Validate & Scan
     runs-on: self-hosted # Uses your private runner
     env:
-      # Passes the GitHub Secret value as Terraform variable 'project_id'
+      # Passes the GitHub Secret values
       TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
-      # Passes the GitHub Secret value as Terraform variable 'region'
       TF_VAR_region: ${{ secrets.GCP_REGION }}
+      TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
     defaults:
       run:
         working-directory: environments/dev
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Create Terraform Plugin Cache Dir
+        run: mkdir -p "$HOME/.terraform.d/plugin-cache"
+
+      - name: Cache Terraform Plugins
+        uses: actions/cache@v4
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive ../../
@@ -65,13 +76,14 @@ jobs:
     env:
       TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
       TF_VAR_region: ${{ secrets.GCP_REGION }}
+      TF_PLUGIN_CACHE_DIR: ~/.terraform.d/plugin-cache
     # Run on push, OR if manually triggered for 'plan'
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.action == 'plan')
     defaults:
       run:
         working-directory: environments/dev
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Terraform Init
         run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
@@ -89,6 +101,7 @@ jobs:
       # These must match the secret names in your GitHub Repo Settings > Secrets > Actions
       TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
       TF_VAR_region: ${{ secrets.GCP_REGION }}
+      TF_PLUGIN_CACHE_DIR: ~/.terraform.d/plugin-cache
     # STRICT RULE: Only runs if you manually select "apply"
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
     environment: production # Adds GitHub UI protection (optional)
@@ -96,7 +109,7 @@ jobs:
       run:
         working-directory: environments/dev
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Terraform Init
         run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
@@ -116,7 +129,7 @@ jobs:
       run:
         working-directory: environments/dev
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Terraform Init
         run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
