@@ -57,7 +57,7 @@ resource "google_sql_database_instance" "main" {
     ip_configuration {
       ipv4_enabled    = false
       private_network = "projects/${var.project_id}/global/networks/${var.network_name}"
-      ssl_mode        = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
+      ssl_mode        = "ENCRYPTED_ONLY"
     }
 
     backup_configuration {

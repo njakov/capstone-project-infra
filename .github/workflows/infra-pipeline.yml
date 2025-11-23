@@ -2,7 +2,7 @@ name: Infrastructure Pipeline
 
 on:
   push:
-    branches: [ "main"]
+    branches: [ "main", "best-practices"]
     paths: [ "environments/dev/**", "modules/**", ".github/workflows/infra-pipeline.yml" ]
   workflow_dispatch:
     inputs:
@@ -46,7 +46,7 @@ jobs:
         continue-on-error: false # Fail if code isn't formatted
 
       - name: Terraform Init
-        run: terraform init -upgrade -backend=false
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
 
       - name: Terraform Validate
         run: terraform validate
