@@ -52,7 +52,8 @@ resource "google_sql_database_instance" "main" {
   deletion_protection = false
 
   settings {
-    tier = var.db_tier
+    tier              = var.db_tier
+    availability_type = "REGIONAL"
     #tfsec:ignore:google-sql-encrypt-in-transit-data
     ip_configuration {
       ipv4_enabled    = false
@@ -63,6 +64,7 @@ resource "google_sql_database_instance" "main" {
     backup_configuration {
       enabled            = true
       binary_log_enabled = true
+      start_time         = "20:55"
     }
 
   }
@@ -90,7 +92,7 @@ resource "google_sql_user" "user" {
 # Create Secrets in Google Secret Manager
 resource "google_secret_manager_secret" "db_username" {
   project   = var.project_id
-  secret_id = "petclinic-db-username-${var.environment}"
+  secret_id = "${var.app_name}-db-username-${var.environment}"
   replication {
     auto {}
   }
@@ -104,7 +106,7 @@ resource "google_secret_manager_secret_version" "db_username_val" {
 
 resource "google_secret_manager_secret" "db_password" {
   project   = var.project_id
-  secret_id = "petclinic-db-password-${var.environment}"
+  secret_id = "${var.app_name}-db-password-${var.environment}"
 
   replication {
     auto {}
@@ -118,7 +120,7 @@ resource "google_secret_manager_secret_version" "db_password_val" {
 }
 resource "google_secret_manager_secret" "db_url" {
   project   = var.project_id
-  secret_id = "petclinic-db-url-${var.environment}"
+  secret_id = "${var.app_name}-db-url-${var.environment}"
 
   replication {
     auto {}

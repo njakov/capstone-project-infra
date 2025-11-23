@@ -15,6 +15,11 @@ variable "environment" {
   description = "The environment name (e.g., dev, prod)."
 }
 
+variable "app_name" {
+  type        = string
+  description = "The application name, used for naming resources."
+}
+
 variable "network_name" {
   type        = string
   description = "The name of the VPC network to connect to."

@@ -22,6 +22,7 @@ module "cloud_sql" {
   project_id  = var.project_id
   region      = var.region
   environment = var.env
+  app_name    = var.app_name
 
   db_instance_name = "${var.app_name}-db-${var.env}"
   db_name          = var.app_name
