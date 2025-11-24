@@ -1,4 +1,4 @@
-# --- 1. Dedicated Service Account (Least Privilege) ---
+# Service Account for the Runner
 resource "google_service_account" "runner_sa" {
   project      = var.project_id
   account_id   = "github-runner-sa"
@@ -28,12 +28,11 @@ resource "google_project_iam_member" "runner_permissions" {
   for_each = toset(local.required_roles)
   project  = var.project_id
   # tfsec:ignore:google-iam-no-project-level-service-account-impersonation
-  # Reason: Terraform Runner needs to attach Service Accounts to the resources it creates.
+  # Terraform Runner needs to attach Service Accounts to the resources it creates.
   role   = each.value
   member = "serviceAccount:${google_service_account.runner_sa.email}"
 }
 
-# --- 2. Hardened Runner VM ---
 # tfsec:ignore:google-compute-no-project-wide-ssh-keys
 resource "google_compute_instance" "runner" {
   project      = var.project_id
@@ -45,7 +44,6 @@ resource "google_compute_instance" "runner" {
     block-project-ssh-keys = "true"
   }
 
-  # Best Practice: Enable Shielded VM features
   shielded_instance_config {
     enable_secure_boot          = true
     enable_vtpm                 = true
@@ -63,7 +61,6 @@ resource "google_compute_instance" "runner" {
   network_interface {
     network    = var.network_name
     subnetwork = var.subnet_id
-    # No access_config block = Private IP only (Enhanced Security)
   }
 
   service_account {

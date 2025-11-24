@@ -13,7 +13,6 @@ output "service_account_email" {
   value       = google_service_account.runner_sa.email
 }
 
-# Helpful Output: Generates the exact command you need to run to SSH into the box
 output "ssh_command" {
   description = "Run this command to connect to the private runner via IAP"
   value       = "gcloud compute ssh ${google_compute_instance.runner.name} --project ${var.project_id} --zone ${google_compute_instance.runner.zone} --tunnel-through-iap"
