@@ -1,15 +1,15 @@
-name: Infrastructure Pipeline v2
+name: Infrastructure Pipeline v3
 
 on:
-  # 1. Automatic Trigger: Runs 'Plan' on Dev when code is pushed
+  # 1. Automatic Trigger: Runs 'Plan' on Dev when code is pushed to main
   push:
-    branches: [ "bootstrap" ]
+    branches: [ "main" ]
     paths:
       - 'environments/**'
       - 'modules/**'
-      - '.github/workflows/workflow.yml'
+      - '.github/workflows/infra-pipeline.yml'
 
-  # 2. Manual Trigger: Plan, Apply, or Destroy on specific Env/Branch
+  # 2. Manual Trigger: Allows selecting Environment and Action
   workflow_dispatch:
     inputs:
       environment:
@@ -30,7 +30,7 @@ on:
           - apply
           - destroy
       ref:
-        description: 'Branch/Tag to checkout (Leave empty to use current)'
+        description: 'Branch/Tag to checkout (Optional)'
         required: false
         type: string
 
@@ -43,7 +43,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # --- Job 1: Setup & Logic ---
+  # --- Job 1: Setup & Logic (The Brains) ---
   setup:
     name: Setup Context
     runs-on: ubuntu-latest
@@ -61,19 +61,18 @@ jobs:
           GITHUB_REF: ${{ github.ref }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          # 1. Determine Environment
+          # 1. Determine Environment & Ref
           if [ "$EVENT_NAME" = "push" ]; then
             ENV="dev"
             REF="${GITHUB_REF#refs/heads/}"
           else
             ENV="${INPUT_ENV:-dev}"
-            # Use input ref if provided, otherwise use the branch the workflow was triggered from
             REF="${INPUT_REF:-${GITHUB_REF#refs/heads/}}"
           fi
 
           # 2. Safety Guard: Block Prod deployments from non-main branches
           if [ "$ENV" = "prod" ] && [ "$REF" != "main" ]; then
-            echo "::error title= Deployment Denied::Production deployments are strictly limited to the 'main' branch. You tried: $REF"
+            echo "::error title=⛔ Deployment Denied::Production deployments are strictly limited to the 'main' branch. You tried: $REF"
             exit 1
           fi
 
@@ -82,8 +81,9 @@ jobs:
           echo "Selected Ref: $REF"
           
           echo "environment=$ENV" >> $GITHUB_OUTPUT
+          # DYNAMIC PATH: This switches between environments/dev and environments/prod
           echo "work_dir=environments/$ENV" >> $GITHUB_OUTPUT
-
+          # DYNAMIC RUNNER: This picks the 'dev' or 'prod' runner label
           echo "runner_label=$ENV" >> $GITHUB_OUTPUT
           echo "ref_to_checkout=$REF" >> $GITHUB_OUTPUT
 
@@ -91,13 +91,13 @@ jobs:
   validate_and_scan:
     name: Validate & Scan
     needs: setup
-    # Dynamic Runner Selection
     runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
     env:
       TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
       TF_VAR_region: ${{ secrets.GCP_REGION }}
     defaults:
       run:
+        # USES THE DYNAMIC PATH
         working-directory: ${{ needs.setup.outputs.work_dir }}
     steps:
       - name: Checkout Code
@@ -165,7 +165,6 @@ jobs:
     runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
     # Only run if manually triggered with 'apply'
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
-    # GitHub Environment for approval gates (optional but recommended)
     environment: ${{ needs.setup.outputs.environment }}
     env:
       TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
@@ -190,7 +189,7 @@ jobs:
           path: ${{ needs.setup.outputs.work_dir }}
 
       - name: Terraform Apply
-        # Apply the exact binary plan file we generated in the previous job
+        # Apply the saved plan file
         run: terraform apply -lock-timeout=5m tfplan
 
   # --- Job 5: Destroy ---
