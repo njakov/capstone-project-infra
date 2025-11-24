@@ -1,4 +1,4 @@
-name: Infrastructure Pipeline
+name: Infrastructure Pipeline v2
 
 on:
   # 1. Automatic Trigger: Runs 'Plan' on Dev when code is pushed
@@ -7,7 +7,7 @@ on:
     paths:
       - 'environments/**'
       - 'modules/**'
-      - '.github/workflows/infra-pipeline.yml'
+      - '.github/workflows/workflow.yml'
 
   # 2. Manual Trigger: Plan, Apply, or Destroy on specific Env/Branch
   workflow_dispatch:
