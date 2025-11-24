@@ -191,7 +191,7 @@ jobs:
 
       - name: Terraform Apply
         # Apply the exact binary plan file we generated in the previous job
-        run: terraform apply -auto-approve tfplan -lock-timeout=5m
+        run: terraform apply -lock-timeout=5m tfplan
 
   # --- Job 5: Destroy ---
   destroy:
