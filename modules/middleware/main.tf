@@ -8,12 +8,15 @@ resource "helm_release" "ingress_nginx" {
   namespace        = "ingress-nginx"
   create_namespace = true
 
-  set = [
-    {
-      name                     = "controller.service.type"
-      value                    = "LoadBalancer"
-      loadBalancerSourceRanges = var.allowed_source_ranges
-    }
+  values = [
+    yamlencode({
+      controller = {
+        service = {
+          type                     = "LoadBalancer"
+          loadBalancerSourceRanges = var.allowed_source_ranges
+        }
+      }
+    })
   ]
 }
 
