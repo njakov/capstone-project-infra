@@ -1,0 +1,220 @@
+name: Infrastructure Pipeline
+
+on:
+  # 1. Automatic Trigger: Runs 'Plan' on Dev when code is pushed
+  push:
+    branches: [ "main", "bootstrap" ]
+    paths:
+      - 'environments/**'
+      - 'modules/**'
+      - '.github/workflows/infra-pipeline.yml'
+
+  # 2. Manual Trigger: Plan, Apply, or Destroy on specific Env/Branch
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target Environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+      action:
+        description: 'Terraform Action'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+      ref:
+        description: 'Branch/Tag to checkout (Leave empty to use current)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Prevent overlapping runs on the same environment
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  # --- Job 1: Setup & Logic ---
+  setup:
+    name: Setup Context
+    runs-on: ubuntu-latest
+    outputs:
+      runner_label: ${{ steps.set-context.outputs.runner_label }}
+      work_dir: ${{ steps.set-context.outputs.work_dir }}
+      environment: ${{ steps.set-context.outputs.environment }}
+      ref_to_checkout: ${{ steps.set-context.outputs.ref_to_checkout }}
+    steps:
+      - id: set-context
+        name: Determine Context
+        env:
+          INPUT_ENV: ${{ inputs.environment }}
+          INPUT_REF: ${{ inputs.ref }}
+          GITHUB_REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # 1. Determine Environment
+          if [ "$EVENT_NAME" = "push" ]; then
+            ENV="dev"
+            REF="${GITHUB_REF#refs/heads/}"
+          else
+            ENV="${INPUT_ENV:-dev}"
+            # Use input ref if provided, otherwise use the branch the workflow was triggered from
+            REF="${INPUT_REF:-${GITHUB_REF#refs/heads/}}"
+          fi
+
+          # 2. Safety Guard: Block Prod deployments from non-main branches
+          if [ "$ENV" = "prod" ] && [ "$REF" != "main" ]; then
+            echo "::error title= Deployment Denied::Production deployments are strictly limited to the 'main' branch. You tried: $REF"
+            exit 1
+          fi
+
+          # 3. Output Variables
+          echo "Selected Environment: $ENV"
+          echo "Selected Ref: $REF"
+          
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          echo "work_dir=environments/$ENV" >> $GITHUB_OUTPUT
+
+          echo "runner_label=$ENV" >> $GITHUB_OUTPUT
+          echo "ref_to_checkout=$REF" >> $GITHUB_OUTPUT
+
+  # --- Job 2: Validate & Scan ---
+  validate_and_scan:
+    name: Validate & Scan
+    needs: setup
+    # Dynamic Runner Selection
+    runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
+    env:
+      TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_region: ${{ secrets.GCP_REGION }}
+    defaults:
+      run:
+        working-directory: ${{ needs.setup.outputs.work_dir }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref_to_checkout }}
+
+      - name: Setup Terraform Cache
+        run: |
+          mkdir -p "$HOME/.terraform.d/plugin-cache"
+
+      - name: Terraform Init
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive ../../
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Run TFLint
+        run: tflint --init && tflint
+
+      - name: Run TFSec
+        run: tfsec .
+
+  # --- Job 3: Plan ---
+  plan:
+    name: Terraform Plan
+    needs: [setup, validate_and_scan]
+    runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
+    # Run on Push, OR if Action is 'plan', OR if Action is 'apply' (Apply needs a Plan artifact!)
+    if: github.event_name == 'push' || inputs.action == 'plan' || inputs.action == 'apply'
+    env:
+      TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_region: ${{ secrets.GCP_REGION }}
+      TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
+    defaults:
+      run:
+        working-directory: ${{ needs.setup.outputs.work_dir }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref_to_checkout }}
+
+      - name: Terraform Init
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: Terraform Plan
+        # Save plan to a binary file 'tfplan'
+        run: terraform plan -out=tfplan -lock-timeout=5m
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ needs.setup.outputs.environment }}
+          path: ${{ needs.setup.outputs.work_dir }}/tfplan
+          retention-days: 1
+
+  # --- Job 4: Apply ---
+  apply:
+    name: Terraform Apply
+    needs: [setup, plan]
+    runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
+    # Only run if manually triggered with 'apply'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
+    # GitHub Environment for approval gates (optional but recommended)
+    environment: ${{ needs.setup.outputs.environment }}
+    env:
+      TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_region: ${{ secrets.GCP_REGION }}
+      TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
+    defaults:
+      run:
+        working-directory: ${{ needs.setup.outputs.work_dir }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref_to_checkout }}
+
+      - name: Terraform Init
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ needs.setup.outputs.environment }}
+          path: ${{ needs.setup.outputs.work_dir }}
+
+      - name: Terraform Apply
+        # Apply the exact binary plan file we generated in the previous job
+        run: terraform apply -auto-approve tfplan -lock-timeout=5m
+
+  # --- Job 5: Destroy ---
+  destroy:
+    name: Terraform Destroy
+    needs: [setup, validate_and_scan]
+    runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
+    environment: ${{ needs.setup.outputs.environment }}
+    env:
+      TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_region: ${{ secrets.GCP_REGION }}
+      TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
+    defaults:
+      run:
+        working-directory: ${{ needs.setup.outputs.work_dir }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref_to_checkout }}
+
+      - name: Terraform Init
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: Terraform Destroy
+        run: terraform destroy -auto-approve
