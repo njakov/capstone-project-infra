@@ -122,9 +122,7 @@ variable "labels" {
   type        = map(string)
   description = "GCP labels to apply to the cluster for billing and organization."
   default = {
-    environment = "dev"
-    terraform   = "true"
-    app         = "petclinic"
+    terraform = "true"
   }
 }
 

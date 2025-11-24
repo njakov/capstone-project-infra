@@ -56,6 +56,12 @@ module "gke" {
   max_node_count         = var.gke_max_nodes
   machine_type           = var.gke_machine_type
   maintenance_start_time = var.gke_maintenance_start_time
+
+  labels = {
+    environment = var.env
+    project     = var.project_id
+    app         = var.app_name
+  }
 }
 
 module "artifact_registry" {
