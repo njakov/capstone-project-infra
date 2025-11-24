@@ -7,7 +7,7 @@ on:
     paths:
       - 'environments/**'
       - 'modules/**'
-      - '.github/workflows/infra-pipeline.yml'
+      - '.github/workflows/infra-pipeline2.yml'
 
   # 2. Manual Trigger: Allows selecting Environment and Action
   workflow_dispatch:
