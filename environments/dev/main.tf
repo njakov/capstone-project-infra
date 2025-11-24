@@ -64,8 +64,9 @@ module "artifact_registry" {
 }
 
 module "middleware" {
-  source     = "../../modules/middleware"
-  depends_on = [module.gke]
+  source                = "../../modules/middleware"
+  allowed_source_ranges = var.allowed_source_ranges
+  depends_on            = [module.gke]
 }
 
 module "runner" {

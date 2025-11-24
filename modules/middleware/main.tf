@@ -10,8 +10,9 @@ resource "helm_release" "ingress_nginx" {
 
   set = [
     {
-      name  = "controller.service.type"
-      value = "LoadBalancer"
+      name                     = "controller.service.type"
+      value                    = "LoadBalancer"
+      loadBalancerSourceRanges = var.allowed_source_ranges
     }
   ]
 }

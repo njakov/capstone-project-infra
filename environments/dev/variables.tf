@@ -45,3 +45,9 @@ variable "gke_maintenance_start_time" {
   type        = string
   default     = "03:00"
 }
+
+variable "allowed_source_ranges" {
+  description = "List of IP CIDR blocks allowed to access the Load Balancer"
+  type        = list(string)
+  default     = ["0.0.0.0/0"] # Default to open if not specified
+}

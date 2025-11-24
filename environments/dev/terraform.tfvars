@@ -8,3 +8,5 @@ gke_min_nodes              = 1
 gke_max_nodes              = 2
 gke_machine_type           = "e2-standard-2"
 gke_maintenance_start_time = "03:00"
+
+allowed_source_ranges = ["YOUR.PUBLIC.IP/32"]
