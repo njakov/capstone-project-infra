@@ -1,30 +1,3 @@
-resource "google_compute_firewall" "allow_internal_strict" {
-  project = var.project_id
-  name    = "${var.network_name}-allow-internal-strict"
-  network = google_compute_network.main.name
-
-  description = "Allows (TCP/UDP/ICMP) protocols for Ingress traffic between subnets within this VPC."
-
-  allow {
-    protocol = "tcp"
-  }
-  allow {
-    protocol = "udp"
-  }
-  allow {
-    protocol = "icmp"
-  }
-
-  source_ranges = [
-    var.subnet_cidr, # Nodes & Runner
-    var.pods_cidr    # GKE Pods
-  ]
-
-  log_config {
-    metadata = "INCLUDE_ALL_METADATA"
-  }
-}
-
 resource "google_compute_firewall" "allow_iap_ssh" {
   project = var.project_id
   name    = "${var.network_name}-allow-iap-ssh"
