@@ -17,6 +17,8 @@ crash.log.*
 
 !environments/dev/terraform.tfvars
 !environments/prod/terraform.tfvars
+!environments/bootstrap/dev.tfvars
+!environments/bootstrap/prod.tfvars
 
 # Ignore override files as they are usually used to override resources locally and so
 # are not checked in
