@@ -8,7 +8,8 @@ resource "google_service_account" "runner_sa" {
 locals {
   required_roles = [
     "roles/compute.instanceAdmin.v1",
-    "roles/compute.networkAdmin",              # To manage VPC/NAT/Firewalls
+    "roles/compute.networkAdmin",
+    "roles/compute.firewalls.create",          # To manage VPC/NAT/Firewalls
     "roles/container.admin",                   # To manage GKE
     "roles/cloudsql.admin",                    # To manage Cloud SQL
     "roles/secretmanager.admin",               # To manage Secrets
