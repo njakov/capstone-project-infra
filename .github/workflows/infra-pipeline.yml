@@ -16,7 +16,6 @@ on:
         - apply
         - destroy
 
-# Best Practice: Concurrency ensures only 1 job runs at a time per branch
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -25,15 +24,13 @@ permissions:
   contents: read
 
 jobs:
-  # --- Job 1: Code Quality & Security ---
+  # Job 1: Code Quality & Security
   validate_and_scan:
     name: Validate & Scan
-    runs-on: self-hosted # Uses your private runner
+    runs-on: self-hosted
     env:
-      # Passes the GitHub Secret values
       TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
       TF_VAR_region: ${{ secrets.GCP_REGION }}
-      TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
     defaults:
       run:
         working-directory: environments/dev
@@ -41,8 +38,10 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Create Terraform Plugin Cache Dir
-        run: mkdir -p "$HOME/.terraform.d/plugin-cache"
+      - name: Setup Terraform Cache
+        run: |
+          mkdir -p "$HOME/.terraform.d/plugin-cache"
+          echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV
 
       - name: Cache Terraform Plugins
         uses: actions/cache@v4
@@ -68,7 +67,7 @@ jobs:
       - name: Run TFSec (Security Scanner)
         run: tfsec .
 
-  # --- Job 2: Plan ---
+  # Job 2: Plan
   plan:
     name: Terraform Plan
     needs: validate_and_scan
@@ -100,22 +99,19 @@ jobs:
         run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
 
       - name: Terraform Plan
-        # Best Practice: -lock-timeout prevents instant failure if state is briefly locked
         run: terraform plan -out=tfplan -lock-timeout=5m
 
-  # --- Job 3: Apply (Manual Trigger Requirement) ---
+  # Job 3: Apply (Manual Trigger)
   apply:
     name: Terraform Apply
     needs: validate_and_scan
     runs-on: self-hosted
     env:
-      # These must match the secret names in your GitHub Repo Settings > Secrets > Actions
       TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
       TF_VAR_region: ${{ secrets.GCP_REGION }}
       TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
-    # STRICT RULE: Only runs if you manually select "apply"
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
-    environment: production # Adds GitHub UI protection (optional)
+    environment: production # Adds GitHub UI protection
     defaults:
       run:
         working-directory: environments/dev
@@ -139,7 +135,7 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -auto-approve -lock-timeout=5m
 
-  # --- Job 4: Destroy (Manual Trigger Requirement) ---
+  # Job 4: Destroy (Manual Trigger)
   destroy:
     name: Terraform Destroy
     needs: validate_and_scan
