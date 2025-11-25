@@ -23,9 +23,7 @@ provider "google" {
 
 data "google_client_config" "default" {}
 
-# REQUIRED for Requirement #2 ("Use Helm")
 provider "helm" {
-  # CHANGE: Add '=' here
   kubernetes = {
     host                   = "https://${module.gke.cluster_endpoint}"
     token                  = data.google_client_config.default.access_token
@@ -33,7 +31,6 @@ provider "helm" {
   }
 }
 
-# OPTIONAL but Recommended (Keep it)
 provider "kubernetes" {
   host                   = "https://${module.gke.cluster_endpoint}"
   token                  = data.google_client_config.default.access_token

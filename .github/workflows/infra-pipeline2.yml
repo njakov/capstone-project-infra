@@ -108,12 +108,22 @@ jobs:
       - name: Setup Terraform Cache
         run: |
           mkdir -p "$HOME/.terraform.d/plugin-cache"
+          echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV   
+
+      - name: Cache Terraform Plugins
+        uses: actions/cache@v4
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-
 
       - name: Terraform Init
         run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive ../../
+        continue-on-error: false
 
       - name: Terraform Validate
         run: terraform validate
