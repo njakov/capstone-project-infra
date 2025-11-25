@@ -1,104 +1,157 @@
-Advanced Capstone Project
-Components
-Infrastructure Automation
-Use Terraform to provision a scalable Kubernetes-based architecture.
-Introduce Load Balancers and HA configurations.
-CI/CD Pipeline
-CI/CD workflows with automated testing, security checks, and rollback capabilities. Environments branching support.
-Monitoring and Alerting
-Implement resource monitoring, application performance tracking, and automated alerts.
-Secrets Management
-Primary Secret Manager: Use Cloud Secret Manager for all secrets related to infrastructure, database, and CI/CD.
-Architecture diagram
-Source code: GitHub or GitLab
-Cloud: GCP
-Infrastructure automation tool: Terraform
-Remote state storage for Terraform: Google Cloud Storage
-Configuration management: Helm
-CI/CD automation tool: GitLab CI/GitHub Actions/Jenkins
-Build tool: Maven or Gradle
-Artifacts: Docker images
-Artifact storage: Google Container Registry/GitLab Registry
-Persistent database for application: Cloud SQL in GCP
-Scripts: Python and/or Bash
-Requirements:
-Infrastructure Automation
-Create an infrastructure automation pipeline that prepares the environment for application deployment using the Infrastructure as Code approach. Infrastructure configuration should be in a separate repository from the application source code.
+# Advanced Capstone Project: Cloud Infrastructure
 
-Some preparation steps can be done manually or by running automation scripts locally:
-If you’re going to use Amazon S3, Azure Blob Storage, or Google Cloud Storage as a remote state storage for Terraform, it should be created in advance.
-If you’re going to use GitLab SaaS (GitLab.com) or GitHub Actions, you need a runner for your first job. In the beginning, it can be installed on your local machine or terraform for runner creation can be run locally.
-If you’re going to use Jenkins, then create a virtual machine, install Jenkins and take care of agents.
+This repository contains the **Infrastructure as Code (IaC)** implementation for the Advanced Capstone Project. It uses **Terraform** to provision a scalable, secure, and automated Kubernetes-based architecture on **Google Cloud Platform (GCP)**.
 
-Infrastructure provisioning pipeline.
-It should include the following jobs:
-configuration formatting,
-configuration validation and scanning (tflint, tfsec, fmt, validate)
-Plan,
-provisioning resources (manual job),
-destroying resources (manual job).
+The infrastructure is designed to host a Java Spring PetClinic application with high availability, automated CI/CD pipelines, and strict security practices.
 
-Use Terraform to create the following resources in the cloud:
-A managed Kubernetes cluster to host the application.
-Autoscaling based on CPU usage.
-A Load Balancer to distribute traffic across applications.
-A persistent database for application.
-Additional virtual machine with all the needed network-related resources to run additional software like Gitlab/GitHub Actions runners, Nexus (if used).
-Bucket for Terraform State (GCS with CMEK for Terraform remote state storage)
-Configuration Management
-Use Helm to deploy applications and any required middleware tools to K8S:
-Deploy applications.
-Install monitoring agents (e.g., Prometheus node exporter or Opentelemetry collector, Grafana, Loki).
-For the Load Balancing, you can choose from the native cloud load-balancer (as a K8s service), ingress-nginx, or istio (advanced option).
-Manage sensitive data using a secret manager.
-CI/CD Pipeline
+## Project Overview
 
-A Continuous Integration and Continuous Delivery solution for the Java application spring-petclinic.
-The repository with the spring-petclinic application source code should additionally have configuration files for Maven or Gradle and a Dockerfile.
-In the artifact storage of your choice prepare a registry.
-CI/CD configuration (branches, pipelines, terraform code) should support several environments (ex., dev, qa, prod).
+* **Cloud Provider:** Google Cloud Platform (GCP) 
+* **Infrastructure Tool:** Terraform (State stored in GCS with versioning)
+* **Orchestrator:** Google Kubernetes Engine (GKE) - Private Cluster
+* **Database:** Cloud SQL (MySQL) - Private IP only
+* **CI/CD:** GitHub Actions (Self-hosted runners)
+* **Configuration Management:** Helm 
+* **Monitoring:** Prometheus & Grafana (via Helm) 
 
-The pipeline for a merge request(MR) or a pull request(PR) should include:
-static code analysis,
-Security scans, ex. trivy for Docker image vulnerability scans;
-Tests,
-Build,
-creating an artifact (it can be tagged with a short commit hash),
-pushing the artifact to the artifact storage
-The pipeline for the main branch should include:
-creating a Git tag in the repository using Semantic Versioning approach (a minor version increases on each commit). A python script with semver · PyPI can be used here.
-creating an artifact with Git tag representing the version
-pushing the artifact to the artifact storage
-a manual deployment job that:
-connects to a k8s cluster,
-checks if a previous version of the application is present and removes it,
-gets the image from the container storage,
-runs the application making sure it is connected to a MySQL database in the cloud,
-prints the link to the application.
-Secrets Management
-Primary Secret Manager: Use a cloud Secret Manager for all secrets related to infrastructure, database, and CI/CD.
-Monitoring and Logging
-Use Prometheus and Grafana:
-Export metrics from the application and k8s cluster.
-Visualize metrics in Grafana dashboards.
-Optional: Use GCP's Cloud Monitoring and Logging:
-Monitor k8s health, application logs, and performance metrics.
-Create dashboards for:
-Application uptime.
-Resource usage (CPU, memory, disk).
-Database queries and latency.
-Set up alerts for critical metrics like:
-High CPU/memory usage.
-Application downtime.
-Important
-Use a Service Account with minimal permissions for Terraform and CI/CD tools.
-All resources should not be open to the public Internet.
-Architecture diagram
-Create an architecture diagram for your solution. The following resources can be used as a reference:
-AWS Reference Architecture Diagrams
-GCP Cloud Reference Architectures and Diagrams
-Azure Architectures 
-Tools for diagrams:
-https://draw.io
-https://excalidraw.com/
+## Architecture
+
+The infrastructure follows a modular design with environment separation (`dev`, `prod`) and a bootstrap layer.
+
+### Key Components
+1.  **Network (`modules/network`):**
+    * Custom VPC with private subnets.
+    * **Cloud NAT:** Allows private nodes to access the internet for updates without exposing public IPs.
+    * **IAP Tunneling:** SSH access to internal VMs (Runners) is restricted to Identity-Aware Proxy; no public SSH ports are open.
+2.  **Compute (`modules/gke` & `modules/runner`):**
+    * **GKE:** Private cluster with VPC-native networking. Autoscaling enabled (1-3 nodes) based on CPU usage.
+    * **GitHub Runner:** A dedicated VM in the private subnet acting as a self-hosted runner for CI/CD pipelines. It comes pre-installed with Docker, Terraform, Helm, Java 25, and security scanners (TFSec, TFLint).
+3.  **Database (`modules/cloud-sql`):**
+    * Cloud SQL (MySQL 8.0) connected via Private Service Access (VPC Peering).
+    * Passwords are generated randomly and stored immediately in **Google Secret Manager**.
+4.  **Security:**
+    * **Workload Identity:** GKE Service Accounts map to GCP Service Accounts for fine-grained permissions.
+    * **Secret Manager:** Centralized management for DB credentials and URLs.
+    * **Least Privilege:** Custom Service Accounts with specific IAM roles for Runners and Nodes.
+
+---
+
+## Repository Structure
+
+```text
+├── .github/workflows/       # CI/CD Pipelines
+├── environments/
+│   ├── bootstrap/           # Initial setup (VPC, Runner, State Bucket)
+│   ├── dev/                 # Development environment entry point
+│   └── prod/                # Production environment entry point
+├── modules/                 # Reusable Terraform modules
+│   ├── artifact-registry/   # Docker container storage
+│   ├── cloud-sql/           # Managed MySQL database
+│   ├── gke/                 # Kubernetes Cluster configuration
+│   ├── identity/            # Service Accounts & Workload Identity
+│   ├── middleware/          # Helm charts (Ingress, Prometheus)
+│   ├── network/             # VPC, Subnets, Firewalls, NAT
+│   └── runner/              # Self-hosted GitHub Action Runner VM
+├── scripts/                 # Bash scripts for setup and bootstrapping
+└── .tfsec/                  # Security scanner configuration
+``` 
+
+## Getting Started
+
+### Prerequisites  
+
+1.  **GCP Project:** You must have a Google Cloud Project ID (e.g., `teak-advice-475415-i2`).  
+2.  **Google Cloud SDK:** Installed and authenticated locally.  
+3.  **Terraform:** Installed (v1.14+).  
+
+### Step 1: Initial GCP Setup  
+Run the setup script to enable required APIs (KMS, Storage, IAM), create the Terraform State Bucket, and set up the Service Account with necessary permissions.  
+```bash  chmod +x scripts/setup_gcp.sh  ./scripts/setup_gcp.sh   ```
+
+*   **What this does:** This script executes create-bucket.sh to provision the GCS backend with versioning and setup-terraform-sa.sh to create the Service Account and assign IAM roles.
+    
+
+### Step 2: Bootstrap Environment (Network & Runner)
+
+Before deploying the application infrastructure, you must bootstrap the environment. This layer creates the VPC, Subnets, and the Self-Hosted Runner VM required for the CI/CD pipelines.
+
+
+*   **Note:** This script initializes Terraform in environments/bootstrap and applies the configuration using the corresponding .tfvars file (e.g., dev.tfvars).
+    
+*   **Output:** Upon completion, it will output the runner\_ssh\_command needed to access the private runner VM.
+    
+
+### Step 3: Configure GitHub Secrets
+
+To allow the pipelines to run successfully, add the following secrets to your GitHub Repository settings:
+
+*   GCP\_PROJECT\_ID: Your Project ID (e.g., teak-advice-475415-i2).
+    
+*   GCP\_REGION: The region for resources (e.g., europe-west1).
+    
+*   TF\_STATE\_BUCKET: The name of the GCS bucket created in Step 1 (e.g., terraform-state-bucket-teak-advice-475415-i2).
+    
+
+CI/CD Pipelines
+------------------
+
+The project utilizes **GitHub Actions** with a self-hosted runner located inside the private VPC. The runner is pre-configured via a startup script to include Docker, Terraform, Helm, and Java.
+
+### 1\. Dev Infrastructure Pipeline (dev-only-pipeline.yml)
+
+*   **Trigger:** Pushes to the dev branch or manual workflow\_dispatch.
+    
+*   **Jobs:**
+    
+    *   **Validate & Scan:** Runs terraform fmt, terraform validate, tflint, and tfsec to ensure code quality and security.
+        
+    *   **Plan:** Generates a speculative execution plan.
+        
+    *   **Apply:** Manual trigger required to apply changes to the Dev environment.
+        
+    *   **Destroy:** Manual trigger required to tear down resources.
+        
+
+### 2\. Main Infrastructure Pipeline (infra-pipeline.yml)
+
+*   **Trigger:** Pushes to the main branch.
+    
+*   **Protection:** Enforces that Production deployments can **only** occur from the main branch. If a prod deployment is attempted from another branch, it exits with an error.
+    
+*   **Workflow:** Similar to Dev, but targets the prod environment state and workspace.
+    
+
+## Tools & Technologies Used
+
+| Category | Tool | Description |
+| :--- | :--- | :--- |
+| **IaC** | Terraform | Infrastructure provisioning (v1.14+). |
+| **State** | GCS | Remote backend with versioning enabled. |
+| **Container** | Docker | Application packaging and registry management. |
+| **Orchestration** | Kubernetes (GKE) | Container management with VPC-native networking. |
+| **Charts** | Helm | Deploying Nginx Ingress and Prometheus stack. |
+| **Security** | TFSec / TFLint | Static analysis for Terraform code. |
+| **Secrets** | Secret Manager | Secure storage for Database credentials and URLs. |
+| **CI/CD** | GitHub Actions | Automation pipelines running on self-hosted runners. |
+
+Monitoring & Middleware
+--------------------------
+
+The modules/middleware module installs essential shared services into the cluster via Helm:
+
+1.  **Nginx Ingress Controller:** Managed via Helm, configured as a LoadBalancer with restricted source ranges.
+    
+2.  **Kube Prometheus Stack:** Deploys Prometheus and Grafana into the monitoring namespace for cluster metrics and visualization.
+    
+
+Important Notes
+------------------
+
+*   **State Management:** The Terraform state is stored remotely in a GCS bucket. **Never** delete the .terraform.lock.hcl files as they ensure provider consistency.
+    
+*   **Security:** Public access to the database is disabled. The Cloud SQL instance only allows connections via Private Service Access (VPC Peering).
+    
+*   **SSH Access:** SSH access to the runner is restricted to IAP tunneling; no public SSH ports are open to the internet.
+    
+*   **Cost:** This infrastructure creates real resources (GKE Cluster, Load Balancers, Cloud SQL). Remember to run the **Destroy** workflow if you are finishing your work to avoid unexpected billing.
 
