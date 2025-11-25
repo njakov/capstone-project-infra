@@ -111,7 +111,7 @@ jobs:
       TF_VAR_region: ${{ secrets.GCP_REGION }}
       TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
-    environment: production # Adds GitHub UI protection
+    environment: dev # Adds GitHub UI protection
     defaults:
       run:
         working-directory: environments/dev
@@ -143,7 +143,7 @@ jobs:
     env:
       TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
-    environment: production
+    environment: dev
     defaults:
       run:
         working-directory: environments/dev
