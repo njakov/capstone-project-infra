@@ -1,47 +1,112 @@
-name: Infrastructure Pipeline
+name: Main Infrastructure Pipeline
 
 on:
+  # Automatic Trigger: Runs 'Plan' on Dev when code is pushed to main
   push:
-    branches: [ "best-practices" ]
-    paths: [ "environments/dev/**", "modules/**", ".github/workflows/infra-pipeline.yml" ]
+    branches: [ "main" ]
+    paths:
+      - 'environments/**'
+      - 'modules/**'
+      - '.github/workflows/infra-pipeline2.yml'
+
+  # Manual Trigger: Allows selecting Environment and Action
   workflow_dispatch:
     inputs:
+      environment:
+        description: 'Target Environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
       action:
-        description: 'Action to perform'
+        description: 'Terraform Action'
         required: true
         default: 'plan'
         type: choice
         options:
-        - plan
-        - apply
-        - destroy
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+          - plan
+          - apply
+          - destroy
+      ref:
+        description: 'Branch/Tag to checkout (Optional)'
+        required: false
+        type: string
 
 permissions:
   contents: read
 
+# Prevent overlapping runs on the same environment
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
 jobs:
-  # Job 1: Code Quality & Security
+  setup:
+    name: Setup Context
+    runs-on: ubuntu-latest
+    outputs:
+      runner_label: ${{ steps.set-context.outputs.runner_label }}
+      work_dir: ${{ steps.set-context.outputs.work_dir }}
+      environment: ${{ steps.set-context.outputs.environment }}
+      ref_to_checkout: ${{ steps.set-context.outputs.ref_to_checkout }}
+    steps:
+      - id: set-context
+        name: Determine Context
+        env:
+          INPUT_ENV: ${{ inputs.environment }}
+          INPUT_REF: ${{ inputs.ref }}
+          GITHUB_REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # 1. Determine Environment & Ref
+          if [ "$EVENT_NAME" = "push" ]; then
+            ENV="dev"
+            REF="${GITHUB_REF#refs/heads/}"
+          else
+            ENV="${INPUT_ENV:-dev}"
+            REF="${INPUT_REF:-${GITHUB_REF#refs/heads/}}"
+          fi
+
+          # 2. Safety Guard: Block Prod deployments from non-main branches
+          if [ "$ENV" = "prod" ] && [ "$REF" != "main" ]; then
+            echo "::error title= Deployment Denied::Production deployments are strictly limited to the 'main' branch. You tried: $REF"
+            exit 1
+          fi
+
+          # 3. Output Variables
+          echo "Selected Environment: $ENV"
+          echo "Selected Ref: $REF"
+          
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          # DYNAMIC PATH: This switches between environments/dev and environments/prod
+          echo "work_dir=environments/$ENV" >> $GITHUB_OUTPUT
+          # DYNAMIC RUNNER: This picks the 'dev' or 'prod' runner label
+          echo "runner_label=$ENV" >> $GITHUB_OUTPUT
+          echo "ref_to_checkout=$REF" >> $GITHUB_OUTPUT
+
+  # Validate & Scan
   validate_and_scan:
     name: Validate & Scan
-    runs-on: self-hosted
+    needs: setup
+    runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
     env:
       TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
       TF_VAR_region: ${{ secrets.GCP_REGION }}
     defaults:
       run:
-        working-directory: environments/dev
+        working-directory: ${{ needs.setup.outputs.work_dir }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref_to_checkout }}
 
       - name: Setup Terraform Cache
         run: |
           mkdir -p "$HOME/.terraform.d/plugin-cache"
-          echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV
+          echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV   
 
       - name: Cache Terraform Plugins
         uses: actions/cache@v4
@@ -51,41 +116,46 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-terraform-
 
-      - name: Terraform Format Check
-        run: terraform fmt -check -recursive ../../
-        continue-on-error: false # Fail if code isn't formatted
-
       - name: Terraform Init
         run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive ../../
+        continue-on-error: false
 
       - name: Terraform Validate
         run: terraform validate
 
-      - name: Run TFLint (Linter)
+      - name: Run TFLint
         run: tflint --init && tflint
 
-      - name: Run TFSec (Security Scanner)
+      - name: Run TFSec
         run: tfsec .
 
-  # Job 2: Plan
+  # Plan
   plan:
     name: Terraform Plan
-    needs: validate_and_scan
-    runs-on: self-hosted
+    needs: [setup, validate_and_scan]
+    runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
+    # Run on Push, OR if Action is 'plan', OR if Action is 'apply' (Apply needs a Plan artifact!)
+    if: github.event_name == 'push' || inputs.action == 'plan' || inputs.action == 'apply'
     env:
       TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
       TF_VAR_region: ${{ secrets.GCP_REGION }}
       TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
-    # Run on push, OR if manually triggered for 'plan'
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.action == 'plan')
     defaults:
       run:
-        working-directory: environments/dev
+        working-directory: ${{ needs.setup.outputs.work_dir }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref_to_checkout }}
 
-      - name: Create Terraform Plugin Cache Dir
-        run: mkdir -p "$HOME/.terraform.d/plugin-cache"
+      - name: Setup Terraform Cache
+        run: |
+          mkdir -p "$HOME/.terraform.d/plugin-cache"
+          echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV   
 
       - name: Cache Terraform Plugins
         uses: actions/cache@v4
@@ -101,25 +171,38 @@ jobs:
       - name: Terraform Plan
         run: terraform plan -out=tfplan -lock-timeout=5m
 
-  # Job 3: Apply (Manual Trigger)
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ needs.setup.outputs.environment }}
+          path: ${{ needs.setup.outputs.work_dir }}/tfplan
+          retention-days: 1
+
+  # Apply
   apply:
     name: Terraform Apply
-    needs: validate_and_scan
-    runs-on: self-hosted
+    needs: [setup, plan]
+    runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
+    # Only run if manually triggered with 'apply'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
+    environment: ${{ needs.setup.outputs.environment }}
     env:
       TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
       TF_VAR_region: ${{ secrets.GCP_REGION }}
       TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
-    environment: production # Adds GitHub UI protection
     defaults:
       run:
-        working-directory: environments/dev
+        working-directory: ${{ needs.setup.outputs.work_dir }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref_to_checkout }}
 
-      - name: Create Terraform Plugin Cache Dir
-        run: mkdir -p "$HOME/.terraform.d/plugin-cache"
+      - name: Setup Terraform Cache
+        run: |
+          mkdir -p "$HOME/.terraform.d/plugin-cache"
+          echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV   
 
       - name: Cache Terraform Plugins
         uses: actions/cache@v4
@@ -128,30 +211,42 @@ jobs:
           key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
           restore-keys: |
             ${{ runner.os }}-terraform-
-      
+
       - name: Terraform Init
         run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
 
-      - name: Terraform Apply
-        run: terraform apply -auto-approve -lock-timeout=5m
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ needs.setup.outputs.environment }}
+          path: ${{ needs.setup.outputs.work_dir }}
 
-  # Job 4: Destroy (Manual Trigger)
+      - name: Terraform Apply
+        run: terraform apply -lock-timeout=5m tfplan
+
+  # Destroy
   destroy:
     name: Terraform Destroy
-    needs: validate_and_scan
-    runs-on: self-hosted
-    env:
-      TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
+    needs: [setup, validate_and_scan]
+    runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
-    environment: production
+    environment: ${{ needs.setup.outputs.environment }}
+    env:
+      TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_region: ${{ secrets.GCP_REGION }}
     defaults:
       run:
-        working-directory: environments/dev
+        working-directory: ${{ needs.setup.outputs.work_dir }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref_to_checkout }}
 
-      - name: Create Terraform Plugin Cache Dir
-        run: mkdir -p "$HOME/.terraform.d/plugin-cache"
+      - name: Setup Terraform Cache
+        run: |
+          mkdir -p "$HOME/.terraform.d/plugin-cache"
+          echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV   
 
       - name: Cache Terraform Plugins
         uses: actions/cache@v4
@@ -160,7 +255,7 @@ jobs:
           key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
           restore-keys: |
             ${{ runner.os }}-terraform-
-      
+
       - name: Terraform Init
         run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
 
