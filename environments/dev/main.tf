@@ -1,44 +1,53 @@
-module "network" {
-  source = "../../modules/network"
-
-  project_id    = var.project_id
-  region        = var.region
-  network_name  = "${var.app_name}-vpc-${var.env}"
-  subnet_cidr   = var.subnet_cidr
-  pods_cidr     = var.pods_cidr
-  services_cidr = var.services_cidr
+# ------------------------------------------------------------------------------
+# 1. DISCOVERY: Find the Network & Subnet created by the Bootstrap Layer
+# ------------------------------------------------------------------------------
+data "google_compute_network" "vpc" {
+  name    = "${var.app_name}-vpc-${var.env}"
+  project = var.project_id
 }
 
+data "google_compute_subnetwork" "private_subnet" {
+  name    = "${var.app_name}-vpc-${var.env}-private"
+  region  = var.region
+  project = var.project_id
+}
+
+# ------------------------------------------------------------------------------
+# 2. IDENTITY: Create the Application Service Account
+# ------------------------------------------------------------------------------
 module "identity" {
   source = "../../modules/identity"
 
   project_id    = var.project_id
   env           = var.env
   app_name      = var.app_name
-  k8s_namespace = "default"            # Namespace where the app runs in GKE
-  k8s_sa_name   = "${var.app_name}-sa" # K8s Service Account name for Workload Identity
+  k8s_namespace = "default"
+  k8s_sa_name   = "${var.app_name}-sa"
 }
 
+# ------------------------------------------------------------------------------
+# 3. DATABASE: Cloud SQL
+# ------------------------------------------------------------------------------
 module "cloud_sql" {
   source = "../../modules/cloud-sql"
 
   project_id  = var.project_id
   region      = var.region
   environment = var.env
-  app_name    = var.app_name
 
+  app_name         = var.app_name
   db_instance_name = "${var.app_name}-db-${var.env}"
   db_name          = var.app_name
   db_user          = var.app_name
   db_tier          = var.db_tier
 
-  network_name = module.network.network_name
-  # DB module grants secret access & client roles
+  network_name              = data.google_compute_network.vpc.name
   app_service_account_email = module.identity.email
-
-  depends_on = [module.network]
 }
 
+# ------------------------------------------------------------------------------
+# 4. KUBERNETES: GKE Cluster
+# ------------------------------------------------------------------------------
 module "gke" {
   source = "../../modules/gke"
 
@@ -46,11 +55,13 @@ module "gke" {
   region       = var.region
   cluster_name = "${var.app_name}-gke-${var.env}"
 
-  network_name          = module.network.network_name
-  subnet_id             = module.network.subnet_id
-  subnet_pods_range     = module.network.subnet_pods_range
-  subnet_services_range = module.network.subnet_services_range
-  subnet_ip_cidr_range  = module.network.subnet_ip_cidr_range
+  network_name = data.google_compute_network.vpc.name
+  subnet_id    = data.google_compute_subnetwork.private_subnet.id
+
+  subnet_pods_range     = "pods"
+  subnet_services_range = "services"
+
+  subnet_ip_cidr_range = data.google_compute_subnetwork.private_subnet.ip_cidr_range
 
   min_node_count         = var.gke_min_nodes
   max_node_count         = var.gke_max_nodes
@@ -62,8 +73,12 @@ module "gke" {
     project     = var.project_id
     app         = var.app_name
   }
+
 }
 
+# ------------------------------------------------------------------------------
+# 5. ARTIFACTS: Docker Registry
+# ------------------------------------------------------------------------------
 module "artifact_registry" {
   source = "../../modules/artifact-registry"
 
@@ -72,18 +87,10 @@ module "artifact_registry" {
   repository_id = "${var.app_name}-repo-${var.env}"
 }
 
+# ------------------------------------------------------------------------------
+# 6. MIDDLEWARE: Helm Charts
+# ------------------------------------------------------------------------------
 module "middleware" {
-  source                = "../../modules/middleware"
-  allowed_source_ranges = var.allowed_source_ranges
-  depends_on            = [module.gke]
-}
-
-module "runner" {
-  source = "../../modules/runner"
-
-  project_id   = var.project_id
-  env          = var.env
-  zone         = "${var.region}-b"
-  network_name = module.network.network_name
-  subnet_id    = module.network.subnet_id
+  source     = "../../modules/middleware"
+  depends_on = [module.gke]
 }
