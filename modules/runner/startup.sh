@@ -88,4 +88,4 @@ curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/inst
 echo "Configuring Docker Auth..."
 gcloud auth configure-docker --quiet
 
-echo "✅ Installation Complete! Runner is ready."
+echo "Installation Complete! Runner is ready."
