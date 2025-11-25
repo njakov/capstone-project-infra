@@ -22,7 +22,7 @@ module "identity" {
   env           = var.env
   app_name      = var.app_name
   k8s_namespace = "default"
-  k8s_sa_name   = "${var.app_name}-sa"
+  k8s_sa_name   = var.app_name
 }
 
 # ------------------------------------------------------------------------------
