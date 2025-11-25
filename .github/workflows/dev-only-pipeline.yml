@@ -2,7 +2,7 @@ name: Dev Infrastructure Pipeline
 
 on:
   push:
-    branches: [ "dev" ]
+    branches: [ "main" ]
     paths: [ "environments/dev/**", "modules/**", ".github/workflows/dev-only-pipeline.yml" ]
   workflow_dispatch:
     inputs:
