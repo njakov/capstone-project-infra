@@ -106,11 +106,11 @@ Before deploying the application infrastructure, you must bootstrap the environm
 
 To allow the pipelines to run successfully, add the following secrets to your GitHub Repository settings:
 
-*   GCP\_PROJECT\_ID: Your Project ID (e.g., teak-advice-475415-i2).
+*   GCP\_PROJECT\_ID: Your Project ID (e.g., my-project-id).
     
 *   GCP\_REGION: The region for resources (e.g., europe-west1).
     
-*   TF\_STATE\_BUCKET: The name of the GCS bucket created in Step 1 (e.g., terraform-state-bucket-teak-advice-475415-i2).
+*   TF\_STATE\_BUCKET: The name of the GCS bucket created in Step 1 (e.g., terraform-state-bucket-my-project-id).
     
 
 CI/CD Pipelines
