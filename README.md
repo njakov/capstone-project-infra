@@ -1,8 +1,20 @@
 # Advanced Capstone Project: Cloud Infrastructure
 
-This repository contains the **Infrastructure as Code (IaC)** implementation for the Advanced Capstone Project. It uses **Terraform** to provision a scalable, secure, and automated Kubernetes-based architecture on **Google Cloud Platform (GCP)**.
 
-The infrastructure is designed to host a Java Spring PetClinic application with high availability, automated CI/CD pipelines, and strict security practices.
+This repository is a part of the DevOps Capstone Project for DevOps Internship in GridDynamics.
+
+* This repository contains the **Infrastructure as Code (IaC)** implementation: it uses **Terraform** to provision a scalable, secure, and automated Kubernetes-based architecture on **Google Cloud Platform (GCP)**.
+* The infrastructure is designed to host a Java Spring PetClinic application with high availability, automated CI/CD pipelines, and strict security practices.
+
+Here, you can find the code for:
+* Creating Self-Hosted GitHub Actions Runner 
+* Dev & Production Environment Provisioning
+* Custom Modules Repository
+* Architecture Diagram
+
+For more details, please refer to:
+* [Capstone Project Description ](.github/assets/Capstone%20advanced%20k8s%20project.pdf)
+* [Spring-Petclinic App Repository](https://github.com/njakov/capstone-project-app)
 
 ## Project Overview
 
@@ -10,30 +22,13 @@ The infrastructure is designed to host a Java Spring PetClinic application with 
 * **Infrastructure Tool:** Terraform (State stored in GCS with versioning)
 * **Orchestrator:** Google Kubernetes Engine (GKE) - Private Cluster
 * **Database:** Cloud SQL (MySQL) - Private IP only
+* **Secrets Management:** Google Secret Manager
 * **CI/CD:** GitHub Actions (Self-hosted runners)
 * **Configuration Management:** Helm 
 * **Monitoring:** Prometheus & Grafana (via Helm) 
 
-## Architecture
-
-The infrastructure follows a modular design with environment separation (`dev`, `prod`) and a bootstrap layer.
-
-### Key Components
-1.  **Network (`modules/network`):**
-    * Custom VPC with private subnets.
-    * **Cloud NAT:** Allows private nodes to access the internet for updates without exposing public IPs.
-    * **IAP Tunneling:** SSH access to internal VMs (Runners) is restricted to Identity-Aware Proxy; no public SSH ports are open.
-2.  **Compute (`modules/gke` & `modules/runner`):**
-    * **GKE:** Private cluster with VPC-native networking. Autoscaling enabled (1-3 nodes) based on CPU usage.
-    * **GitHub Runner:** A dedicated VM in the private subnet acting as a self-hosted runner for CI/CD pipelines. It comes pre-installed with Docker, Terraform, Helm, Java 25, and security scanners (TFSec, TFLint).
-3.  **Database (`modules/cloud-sql`):**
-    * Cloud SQL (MySQL 8.0) connected via Private Service Access (VPC Peering).
-    * Passwords are generated randomly and stored immediately in **Google Secret Manager**.
-4.  **Security:**
-    * **Workload Identity:** GKE Service Accounts map to GCP Service Accounts for fine-grained permissions.
-    * **Secret Manager:** Centralized management for DB credentials and URLs.
-    * **Least Privilege:** Custom Service Accounts with specific IAM roles for Runners and Nodes.
-
+## Project Demo
+![Project Demo](./.github/assets/monitoring.gif) 
 ---
 
 ## Repository Structure
@@ -56,16 +51,41 @@ The infrastructure follows a modular design with environment separation (`dev`, 
 └── .tfsec/                  # Security scanner configuration
 ``` 
 
+## Architecture
+
+The infrastructure follows a modular design with environment separation (`dev`, `prod`) and a bootstrap layer.
+
+### Key Components
+1.  **Network (`modules/network`):**
+    * Custom VPC with private subnets.
+    * **Cloud NAT:** Allows private nodes to access the internet for updates without exposing public IPs.
+    * **IAP Tunneling:** SSH access to internal VMs (Runners) is restricted to Identity-Aware Proxy; no public SSH ports are open.
+2.  **Compute (`modules/gke` & `modules/runner`):**
+    * **GKE:** Private cluster with VPC-native networking. Autoscaling enabled (1-3 nodes) based on CPU usage.
+    * **GitHub Runner:** A dedicated VM in the private subnet acting as a self-hosted runner for CI/CD pipelines. It comes pre-installed with Docker, Terraform, Helm, Java 25, and security scanners (TFSec, TFLint).
+3.  **Database (`modules/cloud-sql`):**
+    * Cloud SQL (MySQL 8.0) connected via Private Service Access (VPC Peering).
+    * Passwords are generated randomly and stored immediately in **Google Secret Manager**.
+4.  **Security:**
+    * **Workload Identity:** GKE Service Accounts map to GCP Service Accounts for fine-grained permissions.
+    * **Secret Manager:** Centralized management for DB credentials and URLs.
+    * **Least Privilege:** Custom Service Accounts with specific IAM roles for Runners and Nodes.
+
+## Architecture Diagram
+![Architecture Diagram](./.github/assets/architecture-diagram.png)
+
+
 ## Getting Started
 
 ### Prerequisites  
 
-1.  **GCP Project:** You must have a Google Cloud Project ID (e.g., `teak-advice-475415-i2`).  
+1.  **GCP Project:** You must have a Google Cloud Project ID (e.g., `my-gcp-project`).  
 2.  **Google Cloud SDK:** Installed and authenticated locally.  
 3.  **Terraform:** Installed (v1.14+).  
 
 ### Step 1: Initial GCP Setup  
-Run the setup script to enable required APIs (KMS, Storage, IAM), create the Terraform State Bucket, and set up the Service Account with necessary permissions.  
+Run the setup script to enable required APIs (KMS, Storage, IAM), create the Terraform State Bucket, and set up the Service Account with necessary permissions. 
+ 
 ```bash  chmod +x scripts/setup_gcp.sh  ./scripts/setup_gcp.sh   ```
 
 *   **What this does:** This script executes create-bucket.sh to provision the GCS backend with versioning and setup-terraform-sa.sh to create the Service Account and assign IAM roles.
@@ -75,9 +95,10 @@ Run the setup script to enable required APIs (KMS, Storage, IAM), create the Ter
 
 Before deploying the application infrastructure, you must bootstrap the environment. This layer creates the VPC, Subnets, and the Self-Hosted Runner VM required for the CI/CD pipelines.
 
+```bash  chmod +x scripts/bootstra-env.sh  ./scripts/bootstrap-env.sh <ENV-NAME>  ```
 
-*   **Note:** This script initializes Terraform in environments/bootstrap and applies the configuration using the corresponding .tfvars file (e.g., dev.tfvars).
-    
+*   **What this does:** This script initializes Terraform in environments/bootstrap and applies the configuration using the corresponding .tfvars file (e.g., dev.tfvars).
+
 *   **Output:** Upon completion, it will output the runner\_ssh\_command needed to access the private runner VM.
     
 
@@ -97,7 +118,7 @@ CI/CD Pipelines
 
 The project utilizes **GitHub Actions** with a self-hosted runner located inside the private VPC. The runner is pre-configured via a startup script to include Docker, Terraform, Helm, and Java.
 
-### 1\. Dev Infrastructure Pipeline (dev-only-pipeline.yml)
+### Dev Infrastructure Pipeline (dev-only-pipeline.yml)
 
 *   **Trigger:** Pushes to the dev branch or manual workflow\_dispatch.
     
@@ -112,7 +133,7 @@ The project utilizes **GitHub Actions** with a self-hosted runner located inside
     *   **Destroy:** Manual trigger required to tear down resources.
         
 
-### 2\. Main Infrastructure Pipeline (infra-pipeline.yml)
+### Main Infrastructure Pipeline (infra-pipeline.yml)
 
 *   **Trigger:** Pushes to the main branch.
     
@@ -120,7 +141,15 @@ The project utilizes **GitHub Actions** with a self-hosted runner located inside
     
 *   **Workflow:** Similar to Dev, but targets the prod environment state and workspace.
     
+### Deployment Pipelines
 
+This repository utilizes GitHub Actions to automate the software delivery process. The workflows are located in `.github/workflows`:
+
+| Workflow | Trigger | Description |
+| :--- | :--- | :--- |
+| **PR Release** (`pr-release.yml`) | Pull Request | Runs on every PR. Performs unit tests, static code analysis, and security scanning (Trivy) to ensure code quality before merging. |
+| **Main Release** (`main-release.yml`) | Push to `main` | Runs when code is merged to main. bumps the Semantic Version, builds the Docker image, tags it with the new version, and pushes it to the Container Registry (GCR/Artifact Registry). |
+| **Manual Deploy** (`manual-deploy.yml`) | Manual Dispatch | A manual workflow to deploy a specific version of the application to the Kubernetes cluster using Helm. |
 ## Tools & Technologies Used
 
 | Category | Tool | Description |
@@ -139,7 +168,7 @@ Monitoring & Middleware
 
 The modules/middleware module installs essential shared services into the cluster via Helm:
 
-1.  **Nginx Ingress Controller:** Managed via Helm, configured as a LoadBalancer with restricted source ranges.
+1.  **Nginx Ingress Controller:** Managed via Helm, configured as a LoadBalancer (type: ClusterIP) with restricted source ranges.
     
 2.  **Kube Prometheus Stack:** Deploys Prometheus and Grafana into the monitoring namespace for cluster metrics and visualization.
     
@@ -147,11 +176,11 @@ The modules/middleware module installs essential shared services into the cluste
 Important Notes
 ------------------
 
-*   **State Management:** The Terraform state is stored remotely in a GCS bucket. **Never** delete the .terraform.lock.hcl files as they ensure provider consistency.
+*   **State Management:** The Terraform state is stored remotely in a GCS bucket.
     
 *   **Security:** Public access to the database is disabled. The Cloud SQL instance only allows connections via Private Service Access (VPC Peering).
     
-*   **SSH Access:** SSH access to the runner is restricted to IAP tunneling; no public SSH ports are open to the internet.
+*   **SSH Access:** SSH access to the runner is restricted to IAP tunneling; 
     
-*   **Cost:** This infrastructure creates real resources (GKE Cluster, Load Balancers, Cloud SQL). Remember to run the **Destroy** workflow if you are finishing your work to avoid unexpected billing.
+*   **Cost:** This infrastructure creates real resources (GKE Cluster, Load Balancers, Cloud SQL). Remember to run the **Destroy** workflow.
 
