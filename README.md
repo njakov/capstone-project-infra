@@ -86,7 +86,7 @@ The infrastructure follows a modular design with environment separation (`dev`, 
 
 1.  **GCP Project:** You must have a Google Cloud Project ID (e.g., `my-gcp-project`).  
 2.  **Google Cloud SDK:** Installed and authenticated locally.  
-3.  **Terraform:** Installed (v1.14+).  
+3.  **Terraform:** Installed (v1.16.0).
 
 ### Step 1: Initial GCP Setup  
 Run the setup script to enable required APIs (KMS, Storage, IAM), create the Terraform State Bucket, and set up the Service Account with necessary permissions. 
@@ -162,7 +162,7 @@ This repository utilizes GitHub Actions to automate the software delivery proces
 
 | Category | Tool | Description |
 | :--- | :--- | :--- |
-| **IaC** | Terraform | Infrastructure provisioning (v1.14+). |
+| **IaC** | Terraform | Infrastructure provisioning (v1.16.0). |
 | **State** | GCS | Remote backend with versioning enabled. |
 | **Container** | Docker | Application packaging and registry management. |
 | **Orchestration** | Kubernetes (GKE) | Container management with VPC-native networking. |

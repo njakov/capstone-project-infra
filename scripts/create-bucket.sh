@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- Configuration ---
-PROJECT_ID="teak-advice-475415-i2"
+PROJECT_ID="project-17c62de2-ec01-476d-908"
 LOCATION="europe-west1"
 KEYRING="terraform-state-keyring"
 KEY_NAME="terraform-state-key"
@@ -44,13 +44,16 @@ gcloud storage service-agent --authorize-cmek="projects/${PROJECT_ID}/locations/
   --project="${PROJECT_ID}"
 
 echo "Creating GCS bucket: $BUCKET_NAME in project $PROJECT_ID..."
-gcloud storage buckets create "gs://$BUCKET_NAME" \
-  --project="$PROJECT_ID" \
-  --location="$LOCATION" \
-  --default-encryption-key="projects/${PROJECT_ID}/locations/${LOCATION}/keyRings/${KEYRING}/cryptoKeys/${KEY_NAME}" \
-  --uniform-bucket-level-access
-
-echo "Bucket created successfully."
+if ! gcloud storage buckets describe "gs://$BUCKET_NAME" --project="$PROJECT_ID" &>/dev/null; then
+  gcloud storage buckets create "gs://$BUCKET_NAME" \
+    --project="$PROJECT_ID" \
+    --location="$LOCATION" \
+    --default-encryption-key="projects/${PROJECT_ID}/locations/${LOCATION}/keyRings/${KEYRING}/cryptoKeys/${KEY_NAME}" \
+    --uniform-bucket-level-access
+  echo "Bucket created successfully."
+else
+  echo "Bucket already exists, skipping creation."
+fi
 
 echo "Enabling versioning on bucket: $BUCKET_NAME..."
 gcloud storage buckets update "gs://$BUCKET_NAME" --versioning

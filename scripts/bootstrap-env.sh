@@ -31,12 +31,12 @@ fi
 
 # --- 2. CONFIGURATION (Shared) ---
 # You can also load these from a .env file if preferred
-export PROJECT_ID="teak-advice-475415-i2"
+export PROJECT_ID="project-17c62de2-ec01-476d-908"
 export REGION="europe-west1"
 export SA_NAME="terraform-sa"
 export SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 export BUCKET_NAME="terraform-state-bucket-${PROJECT_ID}"
-export YOUR_USER_EMAIL="nina.jakovljevic11@gmail.com"
+export YOUR_USER_EMAIL="laz.marko2001@gmail.com"
 
 # Colors
 GREEN='\033[0;32m'
@@ -73,11 +73,11 @@ ROLES=(
   "roles/iam.serviceAccountAdmin"
   "roles/iam.serviceAccountCreator"
   "roles/resourcemanager.projectIamAdmin"
-  "roles/storage.admin"
 )
 for role in "${ROLES[@]}"; do
   gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${SA_EMAIL}" --role="${role}" --condition=None --quiet >/dev/null
 done
+gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" --member="serviceAccount:${SA_EMAIL}" --role="roles/storage.objectAdmin" --quiet >/dev/null
 gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" --member="user:${YOUR_USER_EMAIL}" --role="roles/iam.serviceAccountTokenCreator" --project="${PROJECT_ID}" --quiet >/dev/null
 
 # B. State Bucket

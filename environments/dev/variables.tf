@@ -35,6 +35,11 @@ variable "gke_machine_type" {
   default = "e2-standard-2"
 }
 
+variable "gke_node_locations" {
+  type        = list(string)
+  description = "Zones in the region where GKE worker nodes may run."
+}
+
 variable "db_tier" {
   description = "Database instance machine type"
   type        = string

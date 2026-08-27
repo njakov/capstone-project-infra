@@ -7,18 +7,13 @@ resource "google_service_account" "runner_sa" {
 
 locals {
   required_roles = [
-    "roles/compute.instanceAdmin.v1",
     "roles/compute.networkAdmin",
-    "roles/compute.securityAdmin",             # To manage VPC/NAT/Firewalls
     "roles/container.admin",                   # To manage GKE
     "roles/cloudsql.admin",                    # To manage Cloud SQL
     "roles/secretmanager.admin",               # To manage Secrets
     "roles/iam.serviceAccountUser",            # To attach SAs to GKE nodes/VMs
-    "roles/iam.roleAdmin",                     # To create custom roles (if needed)
     "roles/resourcemanager.projectIamAdmin",   # To grant IAM bindings
-    "roles/storage.objectAdmin",               # To read/write Terraform State
     "roles/serviceusage.serviceUsageConsumer", # To enable APIs
-    "roles/artifactregistry.writer",           # To push images to Artifact Registry
     "roles/iam.serviceAccountAdmin",
     "roles/artifactregistry.admin"
   ]
@@ -31,6 +26,12 @@ resource "google_project_iam_member" "runner_permissions" {
   # tfsec:ignore:google-iam-no-project-level-service-account-impersonation
   # Terraform Runner needs to attach Service Accounts to the resources it creates.
   role   = each.value
+  member = "serviceAccount:${google_service_account.runner_sa.email}"
+}
+
+resource "google_storage_bucket_iam_member" "runner_state_access" {
+  bucket = "terraform-state-bucket-${var.project_id}"
+  role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.runner_sa.email}"
 }
 

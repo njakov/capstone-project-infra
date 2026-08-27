@@ -30,6 +30,7 @@ resource "google_container_cluster" "primary" {
   project             = var.project_id
   name                = var.cluster_name
   location            = var.region
+  node_locations      = var.node_locations
   networking_mode     = "VPC_NATIVE"
   network             = var.network_name
   subnetwork          = var.subnet_id
@@ -78,4 +79,7 @@ resource "google_container_cluster" "primary" {
     enabled = true
   }
 
+  timeouts {
+    create = "60m"
+  }
 }
