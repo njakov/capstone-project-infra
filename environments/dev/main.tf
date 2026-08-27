@@ -16,7 +16,8 @@ data "google_compute_subnetwork" "private_subnet" {
 # 2. IDENTITY: Create the Application Service Account
 # ------------------------------------------------------------------------------
 module "identity" {
-  source = "../../modules/identity"
+  source     = "../../modules/identity"
+  depends_on = [module.gke]
 
   project_id    = var.project_id
   env           = var.env
@@ -66,6 +67,7 @@ module "gke" {
   min_node_count         = var.gke_min_nodes
   max_node_count         = var.gke_max_nodes
   machine_type           = var.gke_machine_type
+  node_locations         = var.gke_node_locations
   maintenance_start_time = var.gke_maintenance_start_time
 
   labels = {

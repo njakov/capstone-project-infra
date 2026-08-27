@@ -34,12 +34,26 @@ resource "google_service_networking_connection" "private_vpc_connection" {
   depends_on = [google_project_service.service_networking]
 }
 
-# Generate a Random Password
-resource "random_password" "db_password" {
+# Preserve the existing application password when renaming the resource.
+moved {
+  from = random_password.db_password
+  to   = random_password.app_password
+}
+
+# Generate independent credentials for the application and root accounts.
+resource "random_password" "app_password" {
   length  = 16
   special = false
   keepers = {
     rotation_trigger = "rotate-2025-11-18"
+  }
+}
+
+resource "random_password" "root_password" {
+  length  = 32
+  special = true
+  keepers = {
+    rotation_trigger = "rotate-2026-08-27"
   }
 }
 
@@ -69,7 +83,7 @@ resource "google_sql_database_instance" "main" {
 
   }
 
-  root_password = random_password.db_password.result
+  root_password = random_password.root_password.result
   depends_on    = [google_service_networking_connection.private_vpc_connection]
 }
 
@@ -85,7 +99,7 @@ resource "google_sql_user" "user" {
   project  = var.project_id
   instance = google_sql_database_instance.main.name
   name     = var.db_user
-  password = random_password.db_password.result
+  password = random_password.app_password.result
   host     = "%"
 }
 
@@ -116,8 +130,26 @@ resource "google_secret_manager_secret" "db_password" {
 
 resource "google_secret_manager_secret_version" "db_password_val" {
   secret      = google_secret_manager_secret.db_password.id
-  secret_data = random_password.db_password.result
+  secret_data = random_password.app_password.result
 }
+
+# Store the root credential separately. No accessor binding is granted to the
+# application service account; administrative access must be granted explicitly.
+resource "google_secret_manager_secret" "db_root_password" {
+  project   = var.project_id
+  secret_id = "${var.app_name}-db-root-password-${var.environment}"
+
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.secret_manager]
+}
+
+resource "google_secret_manager_secret_version" "db_root_password_val" {
+  secret      = google_secret_manager_secret.db_root_password.id
+  secret_data = random_password.root_password.result
+}
+
 resource "google_secret_manager_secret" "db_url" {
   project   = var.project_id
   secret_id = "${var.app_name}-db-url-${var.environment}"

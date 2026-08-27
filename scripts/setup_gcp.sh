@@ -1,15 +1,15 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Starting GCP setup..."
 
 echo "Executing create-bucket.sh..."
-chmod +x create-bucket.sh
-./create-bucket.sh
+"${SCRIPT_DIR}/create-bucket.sh"
 
-echo "Executing create-service-account.sh..."
-chmod +x setup-terraform-sa.sh
-./setup-terraform-sa.sh
+echo "Executing setup-terraform-sa.sh..."
+"${SCRIPT_DIR}/setup-terraform-sa.sh"
 
 echo "All setup scripts have been executed successfully!"

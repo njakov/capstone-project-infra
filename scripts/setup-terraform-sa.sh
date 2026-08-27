@@ -1,9 +1,10 @@
 #!/bin/bash
 
 # --- Configuration (UPDATE THESE) ---
-export PROJECT_ID="teak-advice-475415-i2"
+export PROJECT_ID="project-17c62de2-ec01-476d-908"
 export SA_NAME="terraform-sa"
-export YOUR_USER_EMAIL="nina.jakovljevic11@gmail.com"
+export YOUR_USER_EMAIL="laz.marko2001@gmail.com"
+export BUCKET_NAME="terraform-state-bucket-${PROJECT_ID}"
 # ------------------------------------
 
 # Exit script on any error
@@ -16,12 +17,15 @@ gcloud config set project $PROJECT_ID
 
 echo "Enabling necessary APIs..."
 gcloud services enable iam.googleapis.com \
+    iamcredentials.googleapis.com \
     cloudresourcemanager.googleapis.com \
     serviceusage.googleapis.com \
     container.googleapis.com \
     compute.googleapis.com \
     sqladmin.googleapis.com \
+    servicenetworking.googleapis.com \
     secretmanager.googleapis.com \
+    artifactregistry.googleapis.com \
     --project="${PROJECT_ID}"
 
 echo "---"
@@ -70,6 +74,11 @@ for role in "${ROLES_TO_GRANT[@]}"; do
     --role="${role}" \
     --condition=None
 done
+
+echo "Granting state access on '${BUCKET_NAME}'..."
+gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
+  --member="serviceAccount:${SA_EMAIL}" \
+  --role="roles/storage.objectAdmin"
 
 echo "---"
 echo "Granting YOU ($YOUR_USER_EMAIL) permission to impersonate this SA..."

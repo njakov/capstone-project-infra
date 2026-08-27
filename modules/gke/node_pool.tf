@@ -4,6 +4,7 @@ resource "google_container_node_pool" "primary_nodes" {
   project            = var.project_id
   name               = var.node_pool_name
   location           = var.region
+  node_locations     = var.node_locations
   cluster            = google_container_cluster.primary.id
   initial_node_count = var.min_node_count
 

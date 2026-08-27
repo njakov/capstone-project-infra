@@ -10,6 +10,11 @@ variable "region" {
   description = "The region for the GKE cluster (e.g., 'europe-west1')."
 }
 
+variable "node_locations" {
+  type        = list(string)
+  description = "Zones in the cluster region where worker nodes may run."
+}
+
 variable "cluster_name" {
   type        = string
   description = "The name for the GKE cluster."
