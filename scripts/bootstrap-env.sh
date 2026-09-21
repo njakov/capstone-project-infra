@@ -6,6 +6,12 @@
 # Usage: ./scripts/bootstrap-env.sh <env>
 # Example: ./scripts/bootstrap-env.sh dev
 #          ./scripts/bootstrap-env.sh prod
+#
+# Identifiers (override via env if needed):
+#   PROJECT_ID      — else project_id from environments/bootstrap/<env>.tfvars
+#   REGION          — else region from tfvars, else europe-west1
+#   YOUR_USER_EMAIL — else gcloud config get-value account
+#   BUCKET_NAME     — always terraform-state-bucket-${PROJECT_ID}
 # ==============================================================================
 
 set -e  # Exit on error
@@ -19,6 +25,9 @@ fi
 
 ENV="$1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/config.sh
+source "${SCRIPT_DIR}/lib/config.sh"
+
 BOOTSTRAP_DIR="${SCRIPT_DIR}/../environments/bootstrap"
 TFVARS_FILE="${BOOTSTRAP_DIR}/${ENV}.tfvars"
 
@@ -29,14 +38,12 @@ if [ ! -f "$TFVARS_FILE" ]; then
   exit 1
 fi
 
-# --- 2. CONFIGURATION (Shared) ---
-# You can also load these from a .env file if preferred
-export PROJECT_ID="project-17c62de2-ec01-476d-908"
-export REGION="europe-west1"
-export SA_NAME="terraform-sa"
+# --- 2. CONFIGURATION (from env / tfvars; no hardcoded project or email) ---
+resolve_gcp_config "$TFVARS_FILE"
+resolve_user_email
+
+export SA_NAME="${SA_NAME:-terraform-sa}"
 export SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
-export BUCKET_NAME="terraform-state-bucket-${PROJECT_ID}"
-export YOUR_USER_EMAIL="laz.marko2001@gmail.com"
 
 # Colors
 GREEN='\033[0;32m'
@@ -44,6 +51,8 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 echo -e "${BLUE}=== STARTING BOOTSTRAP FOR ENVIRONMENT: ${ENV} ===${NC}"
+echo "PROJECT_ID=${PROJECT_ID} REGION=${REGION} BUCKET_NAME=${BUCKET_NAME}"
+echo "YOUR_USER_EMAIL=${YOUR_USER_EMAIL}"
 gcloud config set project "$PROJECT_ID"
 
 # ==============================================================================

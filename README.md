@@ -135,16 +135,26 @@ After the infra runner is registered, apply `environments/{dev,prod}` (via `infr
 3. Set `arc_install_charts = true` and apply again to install the controller, scale set, and NetworkPolicies.
 4. Confirm `petclinic-arc-{env}` appears under GitHub → Settings → Actions → Runners.
 
-### Step 4: Configure GitHub Secrets
+### Step 4: Configure GitHub Actions variables
 
-To allow the pipelines to run successfully, add the following secrets to your GitHub Repository settings:
+Project identifiers are **not** secrets. Add these as repository (or environment) **Actions variables** under Settings → Secrets and variables → Actions → Variables:
 
-*   `GCP_PROJECT_ID`: Your Project ID (e.g., my-project-id).
-    
-*   `GCP_REGION`: The region for resources (e.g., europe-west1).
-    
-*   `TF_STATE_BUCKET`: The name of the GCS bucket created in Step 1 (e.g., terraform-state-my-project-id).
-    
+*   `GCP_PROJECT_ID`: Your Project ID (e.g., `my-project-id`).
+*   `GCP_REGION`: The region for resources (e.g., `europe-west1`).
+*   `TF_STATE_BUCKET`: The GCS state bucket from Step 1 (e.g., `terraform-state-bucket-my-project-id`).
+
+Keep authenticators as secrets (e.g. `TF_VAR_grafana_admin_password` when set). If you previously stored the three identifiers above as secrets, migrate them to variables and remove the secret copies so `infra-pipeline.yml` resolves `vars.*`.
+
+### Retarget GCP project
+
+When switching to a different GCP project:
+
+1. Edit committed tfvars `project_id` (and `allowed_source_ranges` / CIDRs as needed) in `environments/bootstrap/{dev,prod}.tfvars` and `environments/{dev,prod}/terraform.tfvars`. Placeholder shapes live in the matching `*.tfvars.example` files.
+2. Set GitHub Actions variables `GCP_PROJECT_ID`, `GCP_REGION`, and `TF_STATE_BUCKET` on this repo (and the matching `GCP_PROJECT_ID` / `GCP_REGION` vars on the app repo).
+3. Run setup/bootstrap with `PROJECT_ID` unset so scripts read tfvars, or `export PROJECT_ID=...` to override.
+4. Apply the env stack (`infra-pipeline`), then deploy the app from the app repo.
+
+Operator convenience outputs after env apply: `app_sa_email`, `cloud_sql_connection_name` (CI uses deterministic names; outputs are for docs / local Helm).
 
 CI/CD Pipelines
 ------------------

@@ -78,4 +78,5 @@ External Alertmanager sinks (Slack/email webhook) are **out of MVP**; firing in 
 ## Related docs
 
 - [ADR 001: Runner isolation](adr/001-runner-isolation.md) — accepted risks; monitoring is orthogonal to runner trust.
+- [README: Retarget GCP project](../README.md#retarget-gcp-project) — update tfvars and GitHub Actions variables when switching projects.
 - App README — Actuator / Helm deploy notes.

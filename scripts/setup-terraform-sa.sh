@@ -1,19 +1,36 @@
 #!/bin/bash
 
-# --- Configuration (UPDATE THESE) ---
-export PROJECT_ID="project-17c62de2-ec01-476d-908"
-export SA_NAME="terraform-sa"
-export YOUR_USER_EMAIL="laz.marko2001@gmail.com"
-export BUCKET_NAME="terraform-state-bucket-${PROJECT_ID}"
-# ------------------------------------
+# Create the Terraform service account and grant IAM roles.
+#
+# Usage: ./scripts/setup-terraform-sa.sh [env]
+#   env — optional; defaults to "dev". Reads environments/bootstrap/<env>.tfvars
+#         unless PROJECT_ID / YOUR_USER_EMAIL are already set in the environment.
+#
+# Identifiers:
+#   PROJECT_ID      — env, else project_id from bootstrap tfvars
+#   YOUR_USER_EMAIL — env, else gcloud config get-value account
+#   BUCKET_NAME     — always terraform-state-bucket-${PROJECT_ID}
 
-# Exit script on any error
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/config.sh
+source "${SCRIPT_DIR}/lib/config.sh"
+
+ENV="${1:-${ENV:-dev}}"
+TFVARS_FILE="${SCRIPT_DIR}/../environments/bootstrap/${ENV}.tfvars"
+
+resolve_gcp_config "$TFVARS_FILE"
+resolve_user_email
+
+export SA_NAME="${SA_NAME:-terraform-sa}"
 export SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
+echo "Using PROJECT_ID=${PROJECT_ID} BUCKET_NAME=${BUCKET_NAME}"
+echo "YOUR_USER_EMAIL=${YOUR_USER_EMAIL}"
+
 echo "Setting project to $PROJECT_ID..."
-gcloud config set project $PROJECT_ID
+gcloud config set project "$PROJECT_ID"
 
 echo "Enabling necessary APIs..."
 gcloud services enable iam.googleapis.com \
@@ -40,11 +57,10 @@ else
   echo "Service Account already exists, skipping creation."
 fi
 
-# --- NEW: Define roles in an array ---
 ROLES_TO_GRANT=(
   # For GKE
   "roles/container.admin"
-  
+
   # For Networking & Runner VM
   "roles/compute.networkAdmin"
   "roles/compute.instanceAdmin.v1"
@@ -59,14 +75,13 @@ ROLES_TO_GRANT=(
   "roles/iam.serviceAccountAdmin"
   "roles/iam.serviceAccountCreator"
 
-  # For granting IAM permissions (the fix from our last step)
+  # For granting IAM permissions
   "roles/resourcemanager.projectIamAdmin"
 )
 
 echo "---"
 echo "Granting IAM roles to '${SA_EMAIL}'..."
 
-# --- NEW: Iterate over the array ---
 for role in "${ROLES_TO_GRANT[@]}"; do
   echo "Granting role: ${role}"
   gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
@@ -82,7 +97,6 @@ gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
 
 echo "---"
 echo "Granting YOU ($YOUR_USER_EMAIL) permission to impersonate this SA..."
-# This REPLACES the JSON key file
 gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
   --member="user:${YOUR_USER_EMAIL}" \
   --role="roles/iam.serviceAccountTokenCreator" \
