@@ -66,14 +66,14 @@ if ! gcloud storage buckets describe "gs://$BUCKET_NAME" --project="$PROJECT_ID"
     --location="$LOCATION" \
     --default-encryption-key="projects/${PROJECT_ID}/locations/${LOCATION}/keyRings/${KEYRING}/cryptoKeys/${KEY_NAME}" \
     --uniform-bucket-level-access \
-    --public-access-prevention=enforced
+    --public-access-prevention
   echo "Bucket created successfully."
 else
   echo "Bucket already exists, skipping creation."
 fi
 
 echo "Enforcing public access prevention on bucket: $BUCKET_NAME..."
-gcloud storage buckets update "gs://$BUCKET_NAME" --public-access-prevention=enforced
+gcloud storage buckets update "gs://$BUCKET_NAME" --public-access-prevention
 
 echo "Enabling versioning on bucket: $BUCKET_NAME..."
 gcloud storage buckets update "gs://$BUCKET_NAME" --versioning

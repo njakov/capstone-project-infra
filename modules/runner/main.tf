@@ -26,11 +26,8 @@ resource "google_project_iam_member" "runner_permissions" {
   member   = "serviceAccount:${google_service_account.runner_sa.email}"
 }
 
-resource "google_storage_bucket_iam_member" "runner_state_access" {
-  bucket = "terraform-state-bucket-${var.project_id}"
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.runner_sa.email}"
-}
+# State-bucket objectAdmin for this SA is granted by scripts/setup-terraform-sa.sh.
+# terraform-sa only has objectAdmin, which cannot get or set the bucket IAM policy.
 
 # Google no longer grants iam.serviceAccounts.actAs to the SA creator, so
 # attaching this SA to the VM 403s without an explicit binding. Resource-level

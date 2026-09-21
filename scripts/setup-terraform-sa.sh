@@ -16,7 +16,8 @@
 # Grants (per project):
 #   - TERRAFORM_SA_ROLES from lib/config.sh (no project-level serviceAccountUser)
 #   - two conditioned projectIamAdmin bindings (each hasOnly list is at most 10 roles)
-#   - bucket roles/storage.objectAdmin only (not storage.admin)
+#   - bucket roles/storage.objectAdmin only (not storage.admin), for terraform-sa
+#     and for github-infra-runner-sa-<env> (member may not exist yet)
 #   - TokenCreator for YOUR_USER_EMAIL on terraform-sa
 #
 # Also creates project custom roles (terraform-sa has no roles/iam.roleAdmin):
@@ -275,10 +276,14 @@ grant_conditioned_project_iam \
 
 echo "---"
 echo "Granting state access on '${BUCKET_NAME}' (roles/storage.objectAdmin only)..."
-gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
-  --member="serviceAccount:${SA_EMAIL}" \
-  --role="roles/storage.objectAdmin" \
-  --quiet >/dev/null
+RUNNER_SA_EMAIL="github-infra-runner-sa-${ENV}@${PROJECT_ID}.iam.gserviceaccount.com"
+for member in "serviceAccount:${SA_EMAIL}" "serviceAccount:${RUNNER_SA_EMAIL}"; do
+  echo "  ${member}"
+  gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
+    --member="${member}" \
+    --role="roles/storage.objectAdmin" \
+    --quiet >/dev/null
+done
 
 echo "---"
 echo "Granting YOU ($YOUR_USER_EMAIL) permission to impersonate this SA..."
