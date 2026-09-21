@@ -27,7 +27,8 @@
 #
 # Before granting conditioned projectIamAdmin, removes any unconditioned binding
 # (--condition=None) and any previous conditional projectIamAdmin binding for
-# this SA, so an old allow-list is not OR'd with the new ones.
+# this SA (get → filter → set, policy version 3 + etag), so an old allow-list
+# is not OR'd with the new ones.
 
 set -e
 
@@ -167,19 +168,32 @@ done
 # Drop every conditional projectIamAdmin binding for terraform-sa, including the
 # retired single allow-list and any previous copy of the two new titles.
 # Unconditioned bindings are removed above and are left untouched here.
+# Force policy version 3 and refuse to write without etag. Retry get → filter →
+# set on etag conflict.
 echo "---"
 echo "Replacing conditional projectIamAdmin bindings for ${SA_EMAIL} (including ${TERRAFORM_SA_IAM_BINDER_RETIRED_TITLE})..."
 POLICY_FILE="$(mktemp)"
 FILTERED_POLICY_FILE="$(mktemp)"
 trap 'rm -f "${POLICY_FILE}" "${FILTERED_POLICY_FILE}"' EXIT
-gcloud projects get-iam-policy "${PROJECT_ID}" --format=json > "${POLICY_FILE}"
-python3 - "${POLICY_FILE}" "serviceAccount:${SA_EMAIL}" "${FILTERED_POLICY_FILE}" <<'PY'
+
+replace_conditional_project_iam_admin() {
+  local max_attempts=3
+  local attempt set_output set_status
+
+  for attempt in $(seq 1 "${max_attempts}"); do
+    echo "Fetching project IAM policy (attempt ${attempt}/${max_attempts})..."
+    gcloud projects get-iam-policy "${PROJECT_ID}" --format=json > "${POLICY_FILE}"
+    python3 - "${POLICY_FILE}" "serviceAccount:${SA_EMAIL}" "${FILTERED_POLICY_FILE}" <<'PY'
 import json
 import sys
 
 source, member, dest = sys.argv[1:]
 with open(source, encoding="utf-8") as handle:
     policy = json.load(handle)
+
+if "etag" not in policy:
+    raise SystemExit("Refusing to set IAM policy without etag")
+policy["version"] = 3
 
 role = "roles/resourcemanager.projectIamAdmin"
 kept = []
@@ -201,7 +215,27 @@ with open(dest, "w", encoding="utf-8") as handle:
     json.dump(policy, handle)
 print(f"Removed {removed} conditional projectIamAdmin binding(s) for {member}.")
 PY
-gcloud projects set-iam-policy "${PROJECT_ID}" "${FILTERED_POLICY_FILE}" --quiet >/dev/null
+
+    set +e
+    set_output="$(gcloud projects set-iam-policy "${PROJECT_ID}" "${FILTERED_POLICY_FILE}" --quiet 2>&1)"
+    set_status=$?
+    set -e
+    if [ "${set_status}" -eq 0 ]; then
+      echo "${set_output}"
+      return 0
+    fi
+    if echo "${set_output}" | grep -Eqi 'etag|concurrent|ABORTED|409'; then
+      echo "IAM etag conflict; retrying get → filter → set..."
+      continue
+    fi
+    echo "${set_output}" >&2
+    return 1
+  done
+
+  echo "Error: failed to replace conditional projectIamAdmin after ${max_attempts} etag retries." >&2
+  return 1
+}
+replace_conditional_project_iam_admin
 
 grant_conditioned_project_iam() {
   local title="$1"

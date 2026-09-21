@@ -18,13 +18,10 @@ locals {
   # arcAppDeploy is created by scripts/setup-terraform-sa.sh.
   # container.developer stays on the terraform-sa CEL allow-list so this
   # binding can be revoked, and is not granted here.
-  # Project-level artifactregistry.writer stays until the env apply creates
-  # google_artifact_registry_repository_iam_member on {app}-repo-{env}.
-  # Remove it from this set only after that binding exists, then bootstrap-apply.
-  # roles/artifactregistry.writer remains on terraform-sa-binder-workload so
-  # that revoke is still allowed.
+  # Writer is repo-scoped in modules/artifact-registry (the only grant).
+  # roles/artifactregistry.writer stays on terraform-sa-binder-workload so
+  # bootstrap can revoke a leftover project-level binding.
   app_runner_roles = toset([
-    "roles/artifactregistry.writer",
     "projects/${var.project_id}/roles/arcAppDeploy",
   ])
 

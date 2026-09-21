@@ -57,6 +57,7 @@ jobs:
         env:
           INPUT_ENV: ${{ inputs.environment }}
           INPUT_REF: ${{ inputs.ref }}
+          INPUT_ACTION: ${{ inputs.action }}
           GITHUB_SHA: ${{ github.sha }}
           EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
@@ -98,20 +99,48 @@ jobs:
             exit 1
           fi
 
-          # 3. Prod may deploy a commit that is the tip of main (identical) or
-          # an ancestor of main (behind). Dev may pin any resolved SHA.
+          # 3. Prod SHA gate. Plan may use the tip of main (identical) or an
+          # ancestor (behind). Apply and destroy must be the current tip of
+          # main (identical only). Dev may pin any resolved SHA.
           if [ "$ENV" = "prod" ]; then
             compare_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${SHA}" --jq .status)"
-            case "$compare_status" in
-              identical|behind) ;;
-              *)
-                echo "::error title=Deployment Denied::Commit ${SHA} is not contained in main (compare status: ${compare_status})."
+            if [ "$EVENT_NAME" = "workflow_dispatch" ] && { [ "$INPUT_ACTION" = "apply" ] || [ "$INPUT_ACTION" = "destroy" ]; }; then
+              case "$compare_status" in
+                identical) ;;
+                *)
+                  echo "::error title=Deployment Denied::Prod apply/destroy require the current tip of main (compare status: ${compare_status})."
+                  exit 1
+                  ;;
+              esac
+            else
+              case "$compare_status" in
+                identical|behind) ;;
+                *)
+                  echo "::error title=Deployment Denied::Commit ${SHA} is not contained in main (compare status: ${compare_status})."
+                  exit 1
+                  ;;
+              esac
+            fi
+
+            # 4. Prod apply/destroy: fail closed if the Environment has no
+            # required reviewers. github.token must be able to GET
+            # /repos/{owner}/{repo}/environments/prod (contents:read is enough
+            # when Actions can read the repo; a 403 means raise Workflow
+            # permissions or use a token that can read Environments).
+            if [ "$EVENT_NAME" = "workflow_dispatch" ] && { [ "$INPUT_ACTION" = "apply" ] || [ "$INPUT_ACTION" = "destroy" ]; }; then
+              # Token must read GET /repos/{owner}/{repo}/environments/prod.
+              if ! reviewer_rules="$(gh api "repos/${GITHUB_REPOSITORY}/environments/prod" --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')"; then
+                echo "::error::Could not read the prod Environment. github.token needs permission to GET /repos/{owner}/{repo}/environments/prod."
                 exit 1
-                ;;
-            esac
+              fi
+              if [ "${reviewer_rules}" = "0" ] || [ -z "${reviewer_rules}" ]; then
+                echo "::error::Prod Environment has no required reviewers. Add them under Settings → Environments → prod before apply/destroy."
+                exit 1
+              fi
+            fi
           fi
 
-          # 4. Output Variables
+          # 5. Output Variables
           echo "Selected Environment: $ENV"
           echo "Selected Ref: $SHA"
 
@@ -145,6 +174,27 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
+
+      - name: Inject Terraform variables from Environment
+        env:
+          ALLOWED_SOURCE_RANGES: ${{ vars.ALLOWED_SOURCE_RANGES }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          if [ -z "${ALLOWED_SOURCE_RANGES}" ]; then
+            echo "::error::ALLOWED_SOURCE_RANGES is empty on the ${TARGET_ENV} Environment. Set it under Settings → Environments."
+            exit 1
+          fi
+          echo "TF_VAR_allowed_source_ranges=${ALLOWED_SOURCE_RANGES}" >> "$GITHUB_ENV"
+
+          # Empty string must not override Terraform's null default.
+          if [ -n "${GRAFANA_ADMIN_PASSWORD}" ]; then
+            {
+              echo "TF_VAR_grafana_admin_password<<EOF"
+              echo "${GRAFANA_ADMIN_PASSWORD}"
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+          fi
 
       - name: Resolve state bucket from tfvars
         working-directory: ${{ github.workspace }}
@@ -227,6 +277,27 @@ jobs:
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
 
+      - name: Inject Terraform variables from Environment
+        env:
+          ALLOWED_SOURCE_RANGES: ${{ vars.ALLOWED_SOURCE_RANGES }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          if [ -z "${ALLOWED_SOURCE_RANGES}" ]; then
+            echo "::error::ALLOWED_SOURCE_RANGES is empty on the ${TARGET_ENV} Environment. Set it under Settings → Environments."
+            exit 1
+          fi
+          echo "TF_VAR_allowed_source_ranges=${ALLOWED_SOURCE_RANGES}" >> "$GITHUB_ENV"
+
+          # Empty string must not override Terraform's null default.
+          if [ -n "${GRAFANA_ADMIN_PASSWORD}" ]; then
+            {
+              echo "TF_VAR_grafana_admin_password<<EOF"
+              echo "${GRAFANA_ADMIN_PASSWORD}"
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+          fi
+
       - name: Resolve state bucket from tfvars
         working-directory: ${{ github.workspace }}
         env:
@@ -305,6 +376,30 @@ jobs:
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
 
+      - name: Inject Terraform variables from Environment
+        env:
+          ALLOWED_SOURCE_RANGES: ${{ vars.ALLOWED_SOURCE_RANGES }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          if [ -z "${ALLOWED_SOURCE_RANGES}" ]; then
+            echo "::error::ALLOWED_SOURCE_RANGES is empty on the ${TARGET_ENV} Environment. Set it under Settings → Environments."
+            exit 1
+          fi
+          echo "TF_VAR_allowed_source_ranges=${ALLOWED_SOURCE_RANGES}" >> "$GITHUB_ENV"
+
+          # Empty string must not override Terraform's null default.
+          if [ -n "${GRAFANA_ADMIN_PASSWORD}" ]; then
+            {
+              echo "TF_VAR_grafana_admin_password<<EOF"
+              echo "${GRAFANA_ADMIN_PASSWORD}"
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+          elif [ "${TARGET_ENV}" = "prod" ]; then
+            echo "::error::GRAFANA_ADMIN_PASSWORD must be set on the prod Environment for apply."
+            exit 1
+          fi
+
       - name: Resolve state bucket from tfvars
         working-directory: ${{ github.workspace }}
         env:
@@ -378,6 +473,27 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
+
+      - name: Inject Terraform variables from Environment
+        env:
+          ALLOWED_SOURCE_RANGES: ${{ vars.ALLOWED_SOURCE_RANGES }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          if [ -z "${ALLOWED_SOURCE_RANGES}" ]; then
+            echo "::error::ALLOWED_SOURCE_RANGES is empty on the ${TARGET_ENV} Environment. Set it under Settings → Environments."
+            exit 1
+          fi
+          echo "TF_VAR_allowed_source_ranges=${ALLOWED_SOURCE_RANGES}" >> "$GITHUB_ENV"
+
+          # Empty string must not override Terraform's null default.
+          if [ -n "${GRAFANA_ADMIN_PASSWORD}" ]; then
+            {
+              echo "TF_VAR_grafana_admin_password<<EOF"
+              echo "${GRAFANA_ADMIN_PASSWORD}"
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+          fi
 
       - name: Resolve state bucket from tfvars
         working-directory: ${{ github.workspace }}

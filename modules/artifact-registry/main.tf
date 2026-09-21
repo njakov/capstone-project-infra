@@ -7,7 +7,7 @@ resource "google_artifact_registry_repository" "repo" {
 }
 
 # Day-2 runner has roles/artifactregistry.admin, so the env apply can create this.
-# The project-level writer binding in bootstrap-iam stays until this exists.
+# This is the only artifactregistry.writer grant for the app-runner SA.
 resource "google_artifact_registry_repository_iam_member" "app_runner_writer" {
   project    = var.project_id
   location   = google_artifact_registry_repository.repo.location
