@@ -102,7 +102,7 @@ See [ADR 001: Runner isolation](docs/adr/001-runner-isolation.md) for locked dec
 1.  **GCP projects:** Dev = existing `project-62ebde90-46b7-4e70-b59` (display name **PetClinic Dev**; ID immutable). Prod = **new** project (display name **PetClinic Prod**; ID `petclinic-gke-prod`). Never reuse the dev UUID.
 2.  **Google Cloud SDK:** Installed and authenticated locally (`gcloud auth login`).  
 3.  **Application Default Credentials (user):** `gcloud auth application-default login` — as **your user**, without `--impersonate`. Bootstrap then forces Terraform to act as `terraform-sa` via impersonation.  
-4.  **Terraform:** Installed (v1.16.0).
+4.  **Terraform:** Installed (v1.16.x; the runner apt pin is 1.16.3).
 
 ### Terraform authentication (two principals)
 
@@ -253,7 +253,7 @@ Application build/release/deploy workflows live in the **[capstone-project-app](
 
 | Category | Tool | Description |
 | :--- | :--- | :--- |
-| **IaC** | Terraform | Infrastructure provisioning (v1.16.0). |
+| **IaC** | Terraform | Infrastructure provisioning (v1.16.x). |
 | **State** | GCS | Remote backend with versioning enabled. |
 | **Container** | Docker / Kaniko | Packaging; ARC builds prefer Kaniko (non-privileged). |
 | **Orchestration** | Kubernetes (GKE) | Container management with VPC-native networking. |

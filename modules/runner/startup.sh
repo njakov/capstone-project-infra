@@ -57,7 +57,7 @@ if ! command -v terraform &> /dev/null; then
     wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null
     echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list
     apt-get update
-    apt-get install -y terraform
+    apt-get install -y terraform=1.16.3-1
 fi
 
 # 4. Install OpenJDK 25
