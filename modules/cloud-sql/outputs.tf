@@ -20,6 +20,11 @@ output "db_password_secret_id" {
   value       = google_secret_manager_secret.db_password.secret_id
 }
 
+output "db_root_password_secret_id" {
+  description = "The Secret Manager ID for the restricted database root password"
+  value       = google_secret_manager_secret.db_root_password.secret_id
+}
+
 output "db_url_secret_id" {
   description = "The Secret Manager ID for the JDBC URL"
   value       = google_secret_manager_secret.db_url.secret_id

@@ -1,5 +1,5 @@
 terraform {
-  required_version = "1.14.0"
+  required_version = "1.16.0"
   required_providers {
     google = {
       source  = "hashicorp/google"
@@ -21,18 +21,22 @@ provider "google" {
   region  = var.region
 }
 
-data "google_client_config" "default" {}
-
+# DNS endpoint presents a Google-managed certificate. Passing the cluster CA fails TLS.
+# The auth plugin refreshes the Google token across a long apply.
 provider "helm" {
   kubernetes = {
-    host                   = "https://${module.gke.cluster_endpoint}"
-    token                  = data.google_client_config.default.access_token
-    cluster_ca_certificate = base64decode(module.gke.cluster_ca_certificate)
+    host = "https://${module.gke.cluster_dns_endpoint}"
+    exec = {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "gke-gcloud-auth-plugin"
+    }
   }
 }
 
 provider "kubernetes" {
-  host                   = "https://${module.gke.cluster_endpoint}"
-  token                  = data.google_client_config.default.access_token
-  cluster_ca_certificate = base64decode(module.gke.cluster_ca_certificate)
+  host = "https://${module.gke.cluster_dns_endpoint}"
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "gke-gcloud-auth-plugin"
+  }
 }

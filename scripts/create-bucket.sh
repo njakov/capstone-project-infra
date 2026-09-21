@@ -1,19 +1,35 @@
 #!/bin/bash
 
-# --- Configuration ---
-PROJECT_ID="teak-advice-475415-i2"
-LOCATION="europe-west1"
+# Create the Terraform state bucket (KMS-encrypted, public access prevention
+# enforced) for the given GCP project.
+#
+# Usage: ./scripts/create-bucket.sh [env]
+#   env — optional; defaults to "dev". Reads environments/bootstrap/<env>.tfvars
+#         unless PROJECT_ID / REGION are already set in the environment.
+#
+# Identifiers:
+#   PROJECT_ID  — env, else project_id from bootstrap tfvars
+#   REGION      — env, else region from tfvars, else europe-west1
+#   BUCKET_NAME — always terraform-state-bucket-${PROJECT_ID}
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/config.sh
+source "${SCRIPT_DIR}/lib/config.sh"
+
+ENV="${1:-${ENV:-dev}}"
+TFVARS_FILE="${SCRIPT_DIR}/../environments/bootstrap/${ENV}.tfvars"
+
+resolve_gcp_config "$TFVARS_FILE"
+
+LOCATION="${REGION}"
 KEYRING="terraform-state-keyring"
 KEY_NAME="terraform-state-key"
 
-# NEW: Appended Project ID to make the bucket name globally unique
-BUCKET_NAME="terraform-state-bucket-${PROJECT_ID}"
+echo "Using PROJECT_ID=${PROJECT_ID} REGION=${LOCATION} BUCKET_NAME=${BUCKET_NAME}"
 
-
-# NEW: More robust error handling
-set -euo pipefail
-
-# NEW: Enable required APIs before trying to use them
+# Enable required APIs before trying to use them
 echo "Enabling required APIs (KMS and Storage) on project ${PROJECT_ID}..."
 gcloud services enable cloudkms.googleapis.com \
     storage.googleapis.com \
@@ -44,15 +60,50 @@ gcloud storage service-agent --authorize-cmek="projects/${PROJECT_ID}/locations/
   --project="${PROJECT_ID}"
 
 echo "Creating GCS bucket: $BUCKET_NAME in project $PROJECT_ID..."
-gcloud storage buckets create "gs://$BUCKET_NAME" \
-  --project="$PROJECT_ID" \
-  --location="$LOCATION" \
-  --default-encryption-key="projects/${PROJECT_ID}/locations/${LOCATION}/keyRings/${KEYRING}/cryptoKeys/${KEY_NAME}" \
-  --uniform-bucket-level-access
+if ! gcloud storage buckets describe "gs://$BUCKET_NAME" --project="$PROJECT_ID" &>/dev/null; then
+  gcloud storage buckets create "gs://$BUCKET_NAME" \
+    --project="$PROJECT_ID" \
+    --location="$LOCATION" \
+    --default-encryption-key="projects/${PROJECT_ID}/locations/${LOCATION}/keyRings/${KEYRING}/cryptoKeys/${KEY_NAME}" \
+    --uniform-bucket-level-access \
+    --public-access-prevention=enforced
+  echo "Bucket created successfully."
+else
+  echo "Bucket already exists, skipping creation."
+fi
 
-echo "Bucket created successfully."
+echo "Enforcing public access prevention on bucket: $BUCKET_NAME..."
+gcloud storage buckets update "gs://$BUCKET_NAME" --public-access-prevention=enforced
 
 echo "Enabling versioning on bucket: $BUCKET_NAME..."
 gcloud storage buckets update "gs://$BUCKET_NAME" --versioning
+
+# Replaces the bucket lifecycle config. This bucket has no other rules.
+# plans/ holds terraform plan files (they contain secret values). Jobs delete
+# the object; this rule is the backstop, including noncurrent versions.
+echo "Setting 1-day lifecycle on plans/ in bucket: $BUCKET_NAME..."
+LIFECYCLE_FILE="$(mktemp)"
+trap 'rm -f "${LIFECYCLE_FILE}"' EXIT
+cat > "${LIFECYCLE_FILE}" <<'EOF'
+{
+  "rule": [
+    {
+      "action": {"type": "Delete"},
+      "condition": {
+        "age": 1,
+        "matchesPrefix": ["plans/"]
+      }
+    },
+    {
+      "action": {"type": "Delete"},
+      "condition": {
+        "daysSinceNoncurrentTime": 1,
+        "matchesPrefix": ["plans/"]
+      }
+    }
+  ]
+}
+EOF
+gcloud storage buckets update "gs://${BUCKET_NAME}" --lifecycle-file="${LIFECYCLE_FILE}"
 
 echo "Versioning enabled successfully. Your backend bucket is ready."

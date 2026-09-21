@@ -3,7 +3,8 @@
 resource "google_container_node_pool" "primary_nodes" {
   project            = var.project_id
   name               = var.node_pool_name
-  location           = var.region
+  location           = var.cluster_location
+  node_locations     = var.node_locations
   cluster            = google_container_cluster.primary.id
   initial_node_count = var.min_node_count
 
@@ -29,7 +30,7 @@ resource "google_container_node_pool" "primary_nodes" {
     tags         = var.node_tags
     image_type   = var.image_type
 
-    service_account = google_service_account.gke_node_sa.email
+    service_account = var.node_service_account_email
 
     oauth_scopes = [
       "https://www.googleapis.com/auth/cloud-platform"
@@ -50,6 +51,75 @@ resource "google_container_node_pool" "primary_nodes" {
 
     labels = {
       "node-pool" = "primary"
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [initial_node_count]
+  }
+}
+
+# Dedicated pool for ARC ephemeral runners — tainted so app/middleware pods stay off it.
+resource "google_container_node_pool" "runners" {
+  count = var.enable_runner_node_pool ? 1 : 0
+
+  project            = var.project_id
+  name               = var.runner_node_pool_name
+  location           = var.cluster_location
+  node_locations     = var.node_locations
+  cluster            = google_container_cluster.primary.id
+  initial_node_count = max(var.runner_min_node_count, 0)
+
+  autoscaling {
+    min_node_count = var.runner_min_node_count
+    max_node_count = var.runner_max_node_count
+  }
+
+  management {
+    auto_repair  = var.auto_repair
+    auto_upgrade = var.auto_upgrade
+  }
+
+  upgrade_settings {
+    max_surge       = var.max_surge
+    max_unavailable = var.max_unavailable
+  }
+
+  node_config {
+    machine_type = var.runner_machine_type
+    disk_type    = var.disk_type
+    disk_size_gb = var.runner_disk_size_gb
+    tags         = var.node_tags
+    image_type   = var.runner_image_type
+
+    service_account = var.node_service_account_email
+
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/cloud-platform"
+    ]
+
+    metadata = {
+      disable-legacy-endpoints = true
+    }
+
+    workload_metadata_config {
+      mode = "GKE_METADATA"
+    }
+
+    shielded_instance_config {
+      enable_secure_boot          = var.enable_secure_boot
+      enable_integrity_monitoring = var.enable_integrity_monitoring
+    }
+
+    labels = {
+      "node-pool" = "runners"
+      "workload"  = "github-runner"
+    }
+
+    taint {
+      key    = "github.runner"
+      value  = "true"
+      effect = "NO_SCHEDULE"
     }
   }
 

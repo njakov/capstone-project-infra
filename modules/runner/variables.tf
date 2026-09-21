@@ -13,6 +13,12 @@ variable "zone" {
   type        = string
 }
 
+variable "machine_type" {
+  description = "GCE machine type for the infra Terraform runner (no Docker builds)"
+  type        = string
+  default     = "e2-medium"
+}
+
 variable "network_name" {
   description = "The name of the VPC network where the runner will be placed"
   type        = string

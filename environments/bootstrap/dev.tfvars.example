@@ -1,0 +1,10 @@
+# Copy to dev.tfvars (or edit the committed live file) when retargeting GCP project.
+# Required keys for bootstrap apply.
+
+project_id = "YOUR_GCP_PROJECT_ID"
+region     = "europe-west1"
+env        = "dev"
+app_name   = "petclinic"
+
+# Infra plane (GCE runners)
+infra_subnet_cidr = "10.50.0.0/24"
