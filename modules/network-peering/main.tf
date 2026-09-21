@@ -1,5 +1,5 @@
-# Bidirectional VPC peering so infra runners can reach the private GKE API
-# over custom routes exported from the app VPC.
+# Bidirectional VPC peering connects the infra and app VPCs.
+# Terraform reaches the GKE control plane through the DNS endpoint, not these routes.
 
 resource "google_compute_network_peering" "a_to_b" {
   name         = var.peering_name_a_to_b

@@ -4,8 +4,8 @@ output "runner_scale_set_name" {
 }
 
 output "arc_runners_namespace" {
-  description = "Namespace where ephemeral runner pods run (null until install_charts)."
-  value       = var.install_charts ? kubernetes_namespace_v1.arc_runners[0].metadata[0].name : null
+  description = "Namespace where ephemeral runner pods run. Created before charts so External Secrets can sync arc-github-app."
+  value       = kubernetes_namespace_v1.arc_runners[0].metadata[0].name
 }
 
 output "arc_systems_namespace" {
@@ -24,7 +24,7 @@ output "charts_installed" {
 }
 
 output "github_app_secret_ids" {
-  description = "Secret Manager secret ids that must have versions before install_charts = true."
+  description = "Secret Manager secret ids to populate before ExternalSecret arc-github-app is Ready and install_charts = true."
   value = {
     app_id          = google_secret_manager_secret.github_app_id.secret_id
     installation_id = google_secret_manager_secret.github_app_installation_id.secret_id

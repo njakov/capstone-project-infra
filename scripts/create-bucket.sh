@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Create the Terraform state bucket (KMS-encrypted) for the given GCP project.
+# Create the Terraform state bucket (KMS-encrypted, public access prevention
+# enforced) for the given GCP project.
 #
 # Usage: ./scripts/create-bucket.sh [env]
 #   env — optional; defaults to "dev". Reads environments/bootstrap/<env>.tfvars
@@ -64,11 +65,15 @@ if ! gcloud storage buckets describe "gs://$BUCKET_NAME" --project="$PROJECT_ID"
     --project="$PROJECT_ID" \
     --location="$LOCATION" \
     --default-encryption-key="projects/${PROJECT_ID}/locations/${LOCATION}/keyRings/${KEYRING}/cryptoKeys/${KEY_NAME}" \
-    --uniform-bucket-level-access
+    --uniform-bucket-level-access \
+    --public-access-prevention=enforced
   echo "Bucket created successfully."
 else
   echo "Bucket already exists, skipping creation."
 fi
+
+echo "Enforcing public access prevention on bucket: $BUCKET_NAME..."
+gcloud storage buckets update "gs://$BUCKET_NAME" --public-access-prevention=enforced
 
 echo "Enabling versioning on bucket: $BUCKET_NAME..."
 gcloud storage buckets update "gs://$BUCKET_NAME" --versioning

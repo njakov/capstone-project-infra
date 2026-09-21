@@ -14,6 +14,7 @@ Related: [ADR 001](adr/001-runner-isolation.md), Gate E in the three-implementat
 - [x] GKE module creates tainted `runners` pool (`github.runner=true:NoSchedule`, label `workload=github-runner`)
 - [x] `modules/arc` + env wiring (`enable_arc`, `arc_install_charts`)
 - [x] App-runner GCP SA + WI binding (`arc-runners` / `arc-runner`) in `modules/identity`
+- [x] External Secrets syncs the GitHub App Secret Manager shells into `arc-github-app` (`modules/external-secrets`). Database secrets are unchanged.
 
 ---
 
@@ -23,9 +24,9 @@ Related: [ADR 001](adr/001-runner-isolation.md), Gate E in the three-implementat
 
 1. Bootstrap already applied (infra VPC + peering + `runner-vm-infra-dev`).
 2. IAP SSH → register GitHub runner with labels **`self-hosted,infra,dev`**.
-3. Verify: from the VM, `gcloud container clusters get-credentials` + `kubectl get nodes` against the **private** endpoint (Gate C).
+3. Verify: from the VM, `gcloud container clusters get-credentials --dns-endpoint` + `kubectl get nodes` (Gate C). Peering does not reach the private IP control plane; Terraform uses the DNS endpoint over Private Google Access.
 
-### 2. Apply env stack — runner pool + Secret Manager shells
+### 2. Apply env stack — runner pool, Secret Manager shells, External Secrets, arc-runners
 
 In `environments/dev/terraform.tfvars`:
 
@@ -40,6 +41,8 @@ Expect:
 
 - Node pool `runners` on the GKE cluster
 - Secret Manager secrets: `arc-github-app-id-dev`, `arc-github-app-installation-id-dev`, `arc-github-app-private-key-dev`
+- Namespace `arc-runners`, plus the External Secrets operator in namespace `external-secrets`
+- `ExternalSecret` `arc-github-app` in `arc-runners`. It is not Ready until the three secret versions exist. Terraform does not create Kubernetes secret `arc-github-app`.
 - Terraform outputs `arc_github_app_secret_ids` and `arc_runner_scale_set_name` (`petclinic-arc-dev`)
 
 ### 3. Create a GitHub App (once per org/user)
@@ -68,7 +71,37 @@ gcloud secrets versions add "arc-github-app-private-key-${ENV}" \
   --project="$PROJECT_ID" --data-file=./github-app.pem
 ```
 
-### 5. Install ARC charts
+### 5. Wait until ExternalSecret `arc-github-app` is Ready
+
+Run this on the **infra runner**, after the secret versions exist and **before** `arc_install_charts = true`. The shells apply already installed External Secrets and created `ExternalSecret` `arc-github-app` in `arc-runners`. That object copies `arc-github-app-id-${ENV}`, `arc-github-app-installation-id-${ENV}`, and `arc-github-app-private-key-${ENV}` into Kubernetes secret `arc-github-app` (`github_app_id`, `github_app_installation_id`, `github_app_private_key`).
+
+Do not create that secret with `kubectl`, and do not import it into Terraform. A refresh of a Terraform-managed secret would write the PEM back into state. Helm still references the name `arc-github-app` in `arc-runners`. If an earlier apply owned the secret, the next plan forgets that object and leaves it in the cluster for the ExternalSecret (`creationPolicy: Owner`) to adopt.
+
+```bash
+PROJECT_ID="<your-gcp-project>"
+ENV=dev
+REGION=europe-west1
+APP_NAME=petclinic
+
+gcloud container clusters get-credentials "${APP_NAME}-gke-${ENV}" \
+  --region="${REGION}" \
+  --project="${PROJECT_ID}" \
+  --dns-endpoint
+
+kubectl get externalsecret arc-github-app -n arc-runners
+```
+
+Wait until that ExternalSecret is Ready (`STATUS` `SecretSynced`). Then confirm the synced secret:
+
+```bash
+kubectl get secret arc-github-app -n arc-runners
+```
+
+**Rotation:** add a new Secret Manager version, wait for the ExternalSecret to refresh (interval 1h), then restart the ARC listener. The listener reads `arc-github-app` at pod start.
+
+Database secrets are unchanged. The app still reads those through its own Workload Identity binding.
+
+### 6. Install ARC charts
 
 Set in `environments/dev/terraform.tfvars`:
 
@@ -78,12 +111,12 @@ arc_install_charts = true
 
 Plan + apply again. Expect:
 
-- Namespaces `arc-systems`, `arc-runners`
+- Namespace `arc-systems` (`arc-runners` already exists, with secret `arc-github-app` synced by External Secrets)
 - Helm releases: controller + scale set `petclinic-arc-dev`
 - NetworkPolicies (default-deny + DNS/HTTPS egress)
 - GitHub → Settings → Actions → Runners shows **`petclinic-arc-dev`**
 
-### 6. Gate E verification (dev)
+### 7. Gate E verification (dev)
 
 | Check | Command / UI |
 |-------|----------------|
@@ -102,8 +135,8 @@ Repeat the same sequence with `ENV=prod` / `runner-vm-infra-prod` / labels `self
 
 Rules:
 
-- Never skip private-API access from the infra runner (Gate C) on prod.
-- Do not set `arc_install_charts = true` on prod until the matching secret versions exist.
+- Never skip DNS-endpoint access from the infra runner (Gate C) on prod.
+- Do not set `arc_install_charts = true` on prod until the matching secret versions exist and `ExternalSecret` `arc-github-app` in `arc-runners` is Ready.
 - Prefer `moved` / careful apply over destroy for prod bootstrap if already migrated.
 
 ---
@@ -123,5 +156,5 @@ After ARC is green on an environment **and** app workflows no longer use the old
 - Infra apply only on `[self-hosted, infra, {env}]`
 - `petclinic-arc-dev` visible in GitHub (prod after its cutover)
 - Runner pods schedule on the tainted pool
-- Peering still reaches private GKE API from infra GCE
+- Infra runner reaches the GKE control plane through the DNS endpoint (not peering custom routes)
 - ADR + README describe ARC as installed (not “later phase”) once charts are live

@@ -91,12 +91,8 @@ jobs:
     name: Validate & Scan
     needs: setup
     runs-on: [self-hosted, infra, "${{ needs.setup.outputs.runner_label }}"]
-    # Environment-scoped vars required on plan/validate too — TF_VAR_project_id
-    # overrides tfvars; repo-level leftovers silently fall back to the wrong project.
+    # GitHub Environment is for deployment protection, not GCP project ids.
     environment: ${{ needs.setup.outputs.environment }}
-    env:
-      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
-      TF_VAR_region: ${{ vars.GCP_REGION }}
     defaults:
       run:
         working-directory: ${{ needs.setup.outputs.work_dir }}
@@ -105,6 +101,26 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
+
+      - name: Resolve state bucket from tfvars
+        working-directory: ${{ github.workspace }}
+        env:
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          tfvars="environments/${TARGET_ENV}/terraform.tfvars"
+          if [ ! -f "$tfvars" ]; then
+            echo "::error::Missing ${tfvars}."
+            exit 1
+          fi
+
+          tfvars_project_id="$(sed -nE 's/^[[:space:]]*project_id[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$tfvars" | head -n 1)"
+          if [ -z "${tfvars_project_id}" ]; then
+            echo "::error::Could not parse project_id from ${tfvars}."
+            exit 1
+          fi
+
+          echo "TF_STATE_BUCKET=terraform-state-bucket-${tfvars_project_id}" >> "$GITHUB_ENV"
+          echo "OK: state bucket terraform-state-bucket-${tfvars_project_id} from ${tfvars}."
 
       - name: Guard day-2 project IAM
         working-directory: ${{ github.workspace }}
@@ -132,7 +148,7 @@ jobs:
             ${{ runner.os }}-terraform-
 
       - name: Terraform Init
-        run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+        run: terraform init -backend-config="bucket=${TF_STATE_BUCKET}"
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive ../../
@@ -152,12 +168,10 @@ jobs:
     name: Terraform Plan
     needs: [setup, validate_and_scan]
     runs-on: [self-hosted, infra, "${{ needs.setup.outputs.runner_label }}"]
-    # Run on Push, OR if Action is 'plan', OR if Action is 'apply' (Apply needs a Plan artifact!)
-    if: github.event_name == 'push' || inputs.action == 'plan' || inputs.action == 'apply'
+    # Push plans dev. Manual plan/apply save a plan; destroy saves a destroy plan for the destroy job.
+    if: github.event_name == 'push' || inputs.action == 'plan' || inputs.action == 'apply' || inputs.action == 'destroy'
     environment: ${{ needs.setup.outputs.environment }}
     env:
-      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
-      TF_VAR_region: ${{ vars.GCP_REGION }}
       TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
     defaults:
       run:
@@ -167,6 +181,26 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
+
+      - name: Resolve state bucket from tfvars
+        working-directory: ${{ github.workspace }}
+        env:
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          tfvars="environments/${TARGET_ENV}/terraform.tfvars"
+          if [ ! -f "$tfvars" ]; then
+            echo "::error::Missing ${tfvars}."
+            exit 1
+          fi
+
+          tfvars_project_id="$(sed -nE 's/^[[:space:]]*project_id[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$tfvars" | head -n 1)"
+          if [ -z "${tfvars_project_id}" ]; then
+            echo "::error::Could not parse project_id from ${tfvars}."
+            exit 1
+          fi
+
+          echo "TF_STATE_BUCKET=terraform-state-bucket-${tfvars_project_id}" >> "$GITHUB_ENV"
+          echo "OK: state bucket terraform-state-bucket-${tfvars_project_id} from ${tfvars}."
 
       - name: Setup Terraform Cache
         run: |
@@ -182,10 +216,15 @@ jobs:
             ${{ runner.os }}-terraform-
 
       - name: Terraform Init
-        run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+        run: terraform init -backend-config="bucket=${TF_STATE_BUCKET}"
 
       - name: Terraform Plan
+        if: github.event_name == 'push' || inputs.action == 'plan' || inputs.action == 'apply'
         run: terraform plan -out=tfplan -lock-timeout=5m
+
+      - name: Terraform Destroy Plan
+        if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
+        run: terraform plan -destroy -out=tfplan -lock-timeout=5m
 
       - name: Upload Plan Artifact
         uses: actions/upload-artifact@v4
@@ -203,8 +242,6 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
     environment: ${{ needs.setup.outputs.environment }}
     env:
-      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
-      TF_VAR_region: ${{ vars.GCP_REGION }}
       TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
     defaults:
       run:
@@ -215,6 +252,26 @@ jobs:
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
 
+      - name: Resolve state bucket from tfvars
+        working-directory: ${{ github.workspace }}
+        env:
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          tfvars="environments/${TARGET_ENV}/terraform.tfvars"
+          if [ ! -f "$tfvars" ]; then
+            echo "::error::Missing ${tfvars}."
+            exit 1
+          fi
+
+          tfvars_project_id="$(sed -nE 's/^[[:space:]]*project_id[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$tfvars" | head -n 1)"
+          if [ -z "${tfvars_project_id}" ]; then
+            echo "::error::Could not parse project_id from ${tfvars}."
+            exit 1
+          fi
+
+          echo "TF_STATE_BUCKET=terraform-state-bucket-${tfvars_project_id}" >> "$GITHUB_ENV"
+          echo "OK: state bucket terraform-state-bucket-${tfvars_project_id} from ${tfvars}."
+
       - name: Setup Terraform Cache
         run: |
           mkdir -p "$HOME/.terraform.d/plugin-cache"
@@ -229,7 +286,7 @@ jobs:
             ${{ runner.os }}-terraform-
 
       - name: Terraform Init
-        run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+        run: terraform init -backend-config="bucket=${TF_STATE_BUCKET}"
 
       - name: Download Plan Artifact
         uses: actions/download-artifact@v4
@@ -240,16 +297,15 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -lock-timeout=5m tfplan
 
-  # Destroy
+  # Destroy applies the destroy plan saved by the plan job. No auto-approve destroy.
   destroy:
     name: Terraform Destroy
-    needs: [setup, validate_and_scan]
+    needs: [setup, plan]
     runs-on: [self-hosted, infra, "${{ needs.setup.outputs.runner_label }}"]
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
     environment: ${{ needs.setup.outputs.environment }}
     env:
-      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
-      TF_VAR_region: ${{ vars.GCP_REGION }}
+      TF_PLUGIN_CACHE_DIR: "$HOME/.terraform.d/plugin-cache"
     defaults:
       run:
         working-directory: ${{ needs.setup.outputs.work_dir }}
@@ -258,6 +314,26 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
+
+      - name: Resolve state bucket from tfvars
+        working-directory: ${{ github.workspace }}
+        env:
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          tfvars="environments/${TARGET_ENV}/terraform.tfvars"
+          if [ ! -f "$tfvars" ]; then
+            echo "::error::Missing ${tfvars}."
+            exit 1
+          fi
+
+          tfvars_project_id="$(sed -nE 's/^[[:space:]]*project_id[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$tfvars" | head -n 1)"
+          if [ -z "${tfvars_project_id}" ]; then
+            echo "::error::Could not parse project_id from ${tfvars}."
+            exit 1
+          fi
+
+          echo "TF_STATE_BUCKET=terraform-state-bucket-${tfvars_project_id}" >> "$GITHUB_ENV"
+          echo "OK: state bucket terraform-state-bucket-${tfvars_project_id} from ${tfvars}."
 
       - name: Setup Terraform Cache
         run: |
@@ -273,7 +349,13 @@ jobs:
             ${{ runner.os }}-terraform-
 
       - name: Terraform Init
-        run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+        run: terraform init -backend-config="bucket=${TF_STATE_BUCKET}"
 
-      - name: Terraform Destroy
-        run: terraform destroy -auto-approve
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ needs.setup.outputs.environment }}
+          path: ${{ needs.setup.outputs.work_dir }}
+
+      - name: Terraform Apply Destroy Plan
+        run: terraform apply -lock-timeout=5m tfplan

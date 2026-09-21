@@ -24,6 +24,19 @@ resource "google_container_cluster" "primary" {
     master_ipv4_cidr_block  = var.master_ipv4_cidr_block
   }
 
+  # Peering is not transitive, and Regular-channel control planes use PSC, so
+  # the infra runner reaches the API by this name over Private Google Access.
+  # Callers must present a Google identity with container.clusters.connect.
+  # Kubernetes ServiceAccount tokens and client certs stay disabled on this name.
+  # IP endpoints stay enabled and remain limited by master authorized networks.
+  control_plane_endpoints_config {
+    dns_endpoint_config {
+      allow_external_traffic    = true
+      enable_k8s_tokens_via_dns = false
+      enable_k8s_certs_via_dns  = false
+    }
+  }
+
   master_authorized_networks_config {
     cidr_blocks {
       display_name = "app-private-subnet"

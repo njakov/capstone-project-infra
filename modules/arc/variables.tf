@@ -23,6 +23,11 @@ variable "app_runner_gcp_sa_email" {
   description = "Email of the least-privilege GCP SA used by ARC runner pods (Workload Identity)."
 }
 
+variable "external_secrets_gcp_sa_email" {
+  type        = string
+  description = "Email of the External Secrets GCP SA granted secretAccessor on the three GitHub App Secret Manager shells."
+}
+
 variable "arc_systems_namespace" {
   type        = string
   description = "Namespace for the ARC controller."
@@ -93,7 +98,7 @@ variable "runner_tolerations" {
 
 variable "install_charts" {
   type        = bool
-  description = "Install ARC Helm releases and K8s secrets. Set false on first apply to create Secret Manager shells only; flip true after adding secret versions."
+  description = "Install ARC Helm releases and NetworkPolicies. Set false on first apply to create Secret Manager shells and the arc-runners namespace. Flip true only after ExternalSecret arc-github-app is Ready."
   default     = true
 }
 

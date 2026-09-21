@@ -14,3 +14,12 @@ resource "google_service_account_iam_member" "app_runner_workload_identity" {
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.arc_runners_namespace}/${var.arc_runner_k8s_sa_name}]"
 }
+
+# KSA external-secrets in arc-runners assumes the GCP account that reads the GitHub App PEM.
+resource "google_service_account_iam_member" "external_secrets_workload_identity" {
+  count = var.external_secrets_sa_email != "" ? 1 : 0
+
+  service_account_id = var.external_secrets_sa_email
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.arc_runners_namespace}/${var.external_secrets_k8s_sa_name}]"
+}

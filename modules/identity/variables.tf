@@ -36,3 +36,15 @@ variable "arc_runner_k8s_sa_name" {
   description = "Kubernetes ServiceAccount name used by ARC runner pods"
   default     = "arc-runner"
 }
+
+variable "external_secrets_sa_email" {
+  type        = string
+  description = "Email of the pre-created External Secrets GCP service account (from bootstrap-iam). Empty string skips the WI binding."
+  default     = ""
+}
+
+variable "external_secrets_k8s_sa_name" {
+  type        = string
+  description = "Kubernetes ServiceAccount in arc-runners that may assume the External Secrets GCP account."
+  default     = "external-secrets"
+}

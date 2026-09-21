@@ -1,0 +1,6 @@
+apiVersion: v2
+name: arc-github-app
+description: SecretStore and ExternalSecret that sync the GitHub App Secret Manager shells into arc-runners.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

@@ -1,0 +1,8 @@
+projectID: ""
+serviceAccountName: external-secrets
+secretStoreName: gcpsm
+externalSecretName: arc-github-app
+targetSecretName: arc-github-app
+githubAppIdSecretId: ""
+githubAppInstallationIdSecretId: ""
+githubAppPrivateKeySecretId: ""
