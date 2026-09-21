@@ -69,22 +69,47 @@ jobs:
             REF="${INPUT_REF:-${GITHUB_REF#refs/heads/}}"
           fi
 
+          case "$ENV" in
+            dev|prod) ;;
+            *)
+              echo "::error::Invalid environment."
+              exit 1
+              ;;
+          esac
+
+          # A newline in ref would add extra $GITHUB_OUTPUT lines and overwrite
+          # environment, work_dir, or runner_label. EOF is the output delimiter.
+          case "$REF" in
+            ""|EOF|*$'\n'*|*$'\r'*)
+              echo "::error::Invalid ref."
+              exit 1
+              ;;
+          esac
+
           # 2. Safety Guard: Block Prod deployments from non-main branches
           if [ "$ENV" = "prod" ] && [ "$REF" != "main" ]; then
-            echo "::error title= Deployment Denied::Production deployments are strictly limited to the 'main' branch. You tried: $REF"
+            echo "::error title=Deployment Denied::Production deployments are strictly limited to the 'main' branch. You tried: $REF"
             exit 1
           fi
 
           # 3. Output Variables
           echo "Selected Environment: $ENV"
           echo "Selected Ref: $REF"
-          
-          echo "environment=$ENV" >> $GITHUB_OUTPUT
-          # DYNAMIC PATH: This switches between environments/dev and environments/prod
-          echo "work_dir=environments/$ENV" >> $GITHUB_OUTPUT
-          # DYNAMIC RUNNER: env label (dev|prod); workflow adds the infra label
-          echo "runner_label=$ENV" >> $GITHUB_OUTPUT
-          echo "ref_to_checkout=$REF" >> $GITHUB_OUTPUT
+
+          {
+            echo "environment<<EOF"
+            echo "$ENV"
+            echo "EOF"
+            echo "work_dir<<EOF"
+            echo "environments/$ENV"
+            echo "EOF"
+            echo "runner_label<<EOF"
+            echo "$ENV"
+            echo "EOF"
+            echo "ref_to_checkout<<EOF"
+            echo "$REF"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
   # Validate & Scan
   validate_and_scan:
@@ -128,7 +153,8 @@ jobs:
           # Project IAM belongs in bootstrap / bootstrap-iam / runner only.
           if grep -R --include='*.tf' --exclude-dir=.terraform -n 'google_project_iam_' \
             environments/dev environments/prod \
-            modules/gke modules/identity modules/cloud-sql; then
+            modules/gke modules/identity modules/cloud-sql \
+            modules/arc modules/external-secrets; then
             echo "::error::Day-2 paths must not declare google_project_iam_* (project IAM is bootstrap-only)"
             exit 1
           fi
@@ -226,12 +252,20 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
         run: terraform plan -destroy -out=tfplan -lock-timeout=5m
 
-      - name: Upload Plan Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfplan-${{ needs.setup.outputs.environment }}
-          path: ${{ needs.setup.outputs.work_dir }}/tfplan
-          retention-days: 1
+      - name: Store plan in state bucket
+        env:
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          plan_object="gs://${TF_STATE_BUCKET}/plans/${TARGET_ENV}/${GITHUB_RUN_ID}.tfplan"
+          gcloud storage cp tfplan "${plan_object}"
+          rm -f tfplan
+          # Apply and destroy in this run still need the object. Plan-only runs do not.
+          if [ "${EVENT_NAME}" = "push" ] || [ "${ACTION}" = "plan" ]; then
+            gcloud storage rm --all-versions "${plan_object}"
+          fi
+          echo "Plan object ${plan_object} handled for ${TARGET_ENV}."
 
   # Apply
   apply:
@@ -288,14 +322,22 @@ jobs:
       - name: Terraform Init
         run: terraform init -backend-config="bucket=${TF_STATE_BUCKET}"
 
-      - name: Download Plan Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: tfplan-${{ needs.setup.outputs.environment }}
-          path: ${{ needs.setup.outputs.work_dir }}
-
       - name: Terraform Apply
-        run: terraform apply -lock-timeout=5m tfplan
+        env:
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          plan_object="gs://${TF_STATE_BUCKET}/plans/${TARGET_ENV}/${GITHUB_RUN_ID}.tfplan"
+          gcloud storage cp "${plan_object}" tfplan
+          set +e
+          terraform apply -lock-timeout=5m tfplan
+          status=$?
+          gcloud storage rm --all-versions "${plan_object}"
+          rm_status=$?
+          rm -f tfplan
+          if [ "${status}" -ne 0 ]; then
+            exit "${status}"
+          fi
+          exit "${rm_status}"
 
   # Destroy applies the destroy plan saved by the plan job. No auto-approve destroy.
   destroy:
@@ -351,11 +393,19 @@ jobs:
       - name: Terraform Init
         run: terraform init -backend-config="bucket=${TF_STATE_BUCKET}"
 
-      - name: Download Plan Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: tfplan-${{ needs.setup.outputs.environment }}
-          path: ${{ needs.setup.outputs.work_dir }}
-
       - name: Terraform Apply Destroy Plan
-        run: terraform apply -lock-timeout=5m tfplan
+        env:
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          plan_object="gs://${TF_STATE_BUCKET}/plans/${TARGET_ENV}/${GITHUB_RUN_ID}.tfplan"
+          gcloud storage cp "${plan_object}" tfplan
+          set +e
+          terraform apply -lock-timeout=5m tfplan
+          status=$?
+          gcloud storage rm --all-versions "${plan_object}"
+          rm_status=$?
+          rm -f tfplan
+          if [ "${status}" -ne 0 ]; then
+            exit "${status}"
+          fi
+          exit "${rm_status}"

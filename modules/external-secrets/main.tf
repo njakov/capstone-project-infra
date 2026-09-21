@@ -31,10 +31,20 @@ resource "helm_release" "external_secrets" {
   values = [
     yamlencode({
       installCRDs = true
-      # Token create lets the controller mint a token for the arc-runners
-      # ServiceAccount named in the SecretStore. Default is true; keep it explicit.
+      # Chart 2.11.0: scoped RBAC is a Role in arc-runners, not a ClusterRole.
+      # Cluster ExternalSecret / SecretStore controllers stay off.
+      scopedNamespace              = var.arc_runners_namespace
+      scopedRBAC                   = true
+      processClusterExternalSecret = false
+      processClusterStore          = false
+      processClusterPushSecret     = false
+      processClusterGenerator      = false
       rbac = {
-        serviceAccountTokenCreate = true
+        # Token create is a Role below, limited to the arc-runners ServiceAccount.
+        serviceAccountTokenCreate = false
+        servicebindings = {
+          create = false
+        }
       }
       # No GCP annotation: this identity cannot read Secret Manager.
       serviceAccount = {
@@ -44,6 +54,42 @@ resource "helm_release" "external_secrets" {
       }
     })
   ]
+}
+
+# The chart's cluster token permission is off. This Role is the only token create.
+resource "kubernetes_role_v1" "token_create" {
+  metadata {
+    name      = "external-secrets-token-create"
+    namespace = var.arc_runners_namespace
+  }
+
+  rule {
+    api_groups     = [""]
+    resources      = ["serviceaccounts/token"]
+    resource_names = [var.k8s_service_account_name]
+    verbs          = ["create"]
+  }
+}
+
+resource "kubernetes_role_binding_v1" "token_create" {
+  metadata {
+    name      = "external-secrets-token-create"
+    namespace = var.arc_runners_namespace
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = kubernetes_role_v1.token_create.metadata[0].name
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = local.controller_sa_name
+    namespace = var.controller_namespace
+  }
+
+  depends_on = [helm_release.external_secrets]
 }
 
 resource "kubernetes_service_account_v1" "external_secrets" {
@@ -65,7 +111,9 @@ resource "helm_release" "github_app" {
   chart     = "${path.module}/charts/github-app"
   namespace = var.arc_runners_namespace
   timeout   = 600
-  wait      = true
+  # ExternalSecret cannot become Ready until secret versions exist, and those
+  # versions are added after this apply. The cutover waits with kubectl.
+  wait = false
 
   # CRDs come from the operator release in the same apply. Skip OpenAPI
   # validation so this plan does not require the schema to be installed yet.

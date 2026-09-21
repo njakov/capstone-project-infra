@@ -19,11 +19,11 @@
 #   - bucket roles/storage.objectAdmin only (not storage.admin)
 #   - TokenCreator for YOUR_USER_EMAIL on terraform-sa
 #
-# Also creates project custom role infraRunnerWorkloadIdentityAdmin
-# (iam.serviceAccounts.get, getIamPolicy, setIamPolicy only — no key minting).
-# terraform-sa has no roles/iam.roleAdmin, so this script (the human) creates
-# the role. Bootstrap binds it on the app and app-runner SAs; it is not granted
-# to terraform-sa.
+# Also creates project custom roles (terraform-sa has no roles/iam.roleAdmin):
+#   infraRunnerWorkloadIdentityAdmin — get, getIamPolicy, setIamPolicy. No keys.
+#     Bootstrap binds it on the app, app-runner, and external-secrets SAs.
+#   arcAppDeploy — cluster get, getCredentials, connect, and namespace get.
+#     Bootstrap binds it on the app-runner SA. No secret or RBAC-admin verbs.
 #
 # Before granting conditioned projectIamAdmin, removes any unconditioned binding
 # (--condition=None) so IAM OR does not bypass the CEL constraint.
@@ -50,11 +50,58 @@ echo "Setting project to $PROJECT_ID..."
 gcloud config set project "$PROJECT_ID"
 
 # Workload-identity policy admin for the infra runner. Bound later by
-# modules/bootstrap-iam on the app and app-runner SAs only. No key permissions.
+# modules/bootstrap-iam on the app, app-runner, and external-secrets SAs. No key permissions.
 WI_ADMIN_ROLE_ID="infraRunnerWorkloadIdentityAdmin"
 WI_ADMIN_ROLE_PERMISSIONS="iam.serviceAccounts.get,iam.serviceAccounts.getIamPolicy,iam.serviceAccounts.setIamPolicy"
 WI_ADMIN_ROLE_TITLE="Infra Runner Workload Identity Admin"
 WI_ADMIN_ROLE_DESCRIPTION="get, getIamPolicy, and setIamPolicy on service accounts. No key creation."
+
+# Deploy identity for ARC. Kubernetes object access is RBAC in petclinic, not this role.
+# getCredentials is required by gcloud container clusters get-credentials (IP endpoint).
+# Namespace create/update stay off: Terraform owns the petclinic namespace.
+ARC_DEPLOY_ROLE_ID="arcAppDeploy"
+ARC_DEPLOY_ROLE_PERMISSIONS="container.clusters.get,container.clusters.getCredentials,container.clusters.connect,container.namespaces.get"
+ARC_DEPLOY_ROLE_TITLE="ARC App Deploy"
+ARC_DEPLOY_ROLE_DESCRIPTION="Cluster get, getCredentials, connect, and namespace get. No secrets or RBAC admin."
+
+ensure_project_custom_role() {
+  local role_id="$1"
+  local title="$2"
+  local description="$3"
+  local permissions="$4"
+  local role_deleted
+
+  echo "---"
+  echo "Ensuring custom role ${role_id}..."
+
+  if role_deleted="$(gcloud iam roles describe "${role_id}" \
+    --project="${PROJECT_ID}" \
+    --format='value(deleted)' 2>/dev/null)"; then
+    if [ "${role_deleted}" = "True" ] || [ "${role_deleted}" = "true" ]; then
+      echo "Custom role is soft-deleted; undeleting, then resetting permissions."
+      gcloud iam roles undelete "${role_id}" \
+        --project="${PROJECT_ID}" \
+        --quiet
+    else
+      echo "Custom role already exists; resetting permissions."
+    fi
+    gcloud iam roles update "${role_id}" \
+      --project="${PROJECT_ID}" \
+      --title="${title}" \
+      --description="${description}" \
+      --permissions="${permissions}" \
+      --stage=GA \
+      --quiet
+  else
+    gcloud iam roles create "${role_id}" \
+      --project="${PROJECT_ID}" \
+      --title="${title}" \
+      --description="${description}" \
+      --permissions="${permissions}" \
+      --stage=GA \
+      --quiet
+  fi
+}
 
 echo "Enabling necessary APIs..."
 gcloud services enable iam.googleapis.com \
@@ -69,37 +116,17 @@ gcloud services enable iam.googleapis.com \
     artifactregistry.googleapis.com \
     --project="${PROJECT_ID}"
 
-echo "---"
-echo "Ensuring custom role ${WI_ADMIN_ROLE_ID} (WI policy only; no key minting)..."
+ensure_project_custom_role \
+  "${WI_ADMIN_ROLE_ID}" \
+  "${WI_ADMIN_ROLE_TITLE}" \
+  "${WI_ADMIN_ROLE_DESCRIPTION}" \
+  "${WI_ADMIN_ROLE_PERMISSIONS}"
 
-# describe succeeds for a live or soft-deleted role and fails when it is absent.
-if role_deleted="$(gcloud iam roles describe "${WI_ADMIN_ROLE_ID}" \
-  --project="${PROJECT_ID}" \
-  --format='value(deleted)' 2>/dev/null)"; then
-  if [ "${role_deleted}" = "True" ] || [ "${role_deleted}" = "true" ]; then
-    echo "Custom role is soft-deleted; undeleting, then resetting permissions."
-    gcloud iam roles undelete "${WI_ADMIN_ROLE_ID}" \
-      --project="${PROJECT_ID}" \
-      --quiet
-  else
-    echo "Custom role already exists; resetting permissions to the WI-only set."
-  fi
-  gcloud iam roles update "${WI_ADMIN_ROLE_ID}" \
-    --project="${PROJECT_ID}" \
-    --title="${WI_ADMIN_ROLE_TITLE}" \
-    --description="${WI_ADMIN_ROLE_DESCRIPTION}" \
-    --permissions="${WI_ADMIN_ROLE_PERMISSIONS}" \
-    --stage=GA \
-    --quiet
-else
-  gcloud iam roles create "${WI_ADMIN_ROLE_ID}" \
-    --project="${PROJECT_ID}" \
-    --title="${WI_ADMIN_ROLE_TITLE}" \
-    --description="${WI_ADMIN_ROLE_DESCRIPTION}" \
-    --permissions="${WI_ADMIN_ROLE_PERMISSIONS}" \
-    --stage=GA \
-    --quiet
-fi
+ensure_project_custom_role \
+  "${ARC_DEPLOY_ROLE_ID}" \
+  "${ARC_DEPLOY_ROLE_TITLE}" \
+  "${ARC_DEPLOY_ROLE_DESCRIPTION}" \
+  "${ARC_DEPLOY_ROLE_PERMISSIONS}"
 
 echo "---"
 echo "Creating Service Account: $SA_NAME..."

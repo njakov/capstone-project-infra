@@ -196,8 +196,10 @@ resource "helm_release" "arc_runners" {
           # Prefer this over privileged DinD; still not a hard security domain (see ADR).
           containers = [
             {
-              name    = "runner"
-              image   = "ghcr.io/actions/actions-runner:latest"
+              name = "runner"
+              # Chart stays 0.10.1. Image is actions-runner 2.337.0 (2026-08-26),
+              # pinned to that tag's multi-arch index digest.
+              image   = "ghcr.io/actions/actions-runner@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4"
               command = ["/home/runner/run.sh"]
               securityContext = {
                 runAsUser = 0
@@ -217,7 +219,8 @@ resource "helm_release" "arc_runners" {
 
 # ------------------------------------------------------------------------------
 # Demo-quality NetworkPolicies (Dataplane V2)
-# Primary isolation: default-deny in arc-runners; allow DNS + HTTPS (+ apiserver).
+# Primary isolation: default-deny in arc-runners; allow DNS, HTTPS, the API server,
+# and the GKE metadata server (Workload Identity).
 # Pod-to-pod HTTP to PetClinic ClusterIPs is denied by omission.
 # ------------------------------------------------------------------------------
 resource "kubernetes_network_policy_v1" "arc_runners_default_deny" {
@@ -268,6 +271,24 @@ resource "kubernetes_network_policy_v1" "arc_runners_allow_egress" {
       ports {
         protocol = "TCP"
         port     = "6443"
+      }
+    }
+
+    # Dataplane V2 applies egress policy to the metadata server. Workload Identity
+    # and gcloud on runner pods use 169.254.169.254 TCP 80 and 988.
+    egress {
+      to {
+        ip_block {
+          cidr = "169.254.169.254/32"
+        }
+      }
+      ports {
+        protocol = "TCP"
+        port     = "80"
+      }
+      ports {
+        protocol = "TCP"
+        port     = "988"
       }
     }
   }
@@ -323,6 +344,24 @@ resource "kubernetes_network_policy_v1" "arc_systems_allow_egress" {
       ports {
         protocol = "TCP"
         port     = "6443"
+      }
+    }
+
+    # Dataplane V2 applies egress policy to the metadata server. Workload Identity
+    # and gcloud on controller pods use 169.254.169.254 TCP 80 and 988.
+    egress {
+      to {
+        ip_block {
+          cidr = "169.254.169.254/32"
+        }
+      }
+      ports {
+        protocol = "TCP"
+        port     = "80"
+      }
+      ports {
+        protocol = "TCP"
+        port     = "988"
       }
     }
   }
