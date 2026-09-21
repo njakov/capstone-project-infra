@@ -38,7 +38,6 @@ resource "google_service_account_iam_member" "terraform_sa_act_as_runner" {
   member             = "serviceAccount:terraform-sa@${var.project_id}.iam.gserviceaccount.com"
 }
 
-# tfsec:ignore:google-compute-no-project-wide-ssh-keys
 resource "google_compute_instance" "runner" {
   project      = var.project_id
   name         = "runner-vm-infra-${var.env}"
@@ -55,8 +54,10 @@ resource "google_compute_instance" "runner" {
     enable_integrity_monitoring = true
   }
 
-  # tfsec:ignore:google-compute-vm-disk-encryption-customer-key
+  # Customer-managed key from scripts/create-bucket.sh (runner-disk-key).
+  # Adding this to an existing VM replaces the boot disk.
   boot_disk {
+    kms_key_self_link = var.disk_kms_key_id
     initialize_params {
       image = "ubuntu-os-cloud/ubuntu-2204-lts"
       size  = 50

@@ -63,7 +63,6 @@ For more details, please refer to:
 │   ├── runner/              # Infra-only self-hosted GitHub Actions runner VM
 │   └── arc/                 # ARC controller + scale set + NetworkPolicies
 ├── scripts/                 # Bash scripts for setup and bootstrapping
-└── .tfsec/                  # Security scanner configuration
 ``` 
 
 ## Architecture
@@ -258,7 +257,7 @@ Application build/release/deploy workflows live in the **[capstone-project-app](
 | **Container** | Docker / Kaniko | Packaging; ARC builds prefer Kaniko (non-privileged). |
 | **Orchestration** | Kubernetes (GKE) | Container management with VPC-native networking. |
 | **Charts** | Helm | Deploying Nginx Ingress and Prometheus stack. |
-| **Security** | TFSec / TFLint | Static analysis for Terraform code. |
+| **Security** | Trivy / TFLint | Static analysis for Terraform code. |
 | **Secrets** | Secret Manager | Secure storage for Database credentials and URLs. |
 | **CI/CD** | GitHub Actions | Infra on GCE; app on ARC ephemeral runners (after cutover). |
 

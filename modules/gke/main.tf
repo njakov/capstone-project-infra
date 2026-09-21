@@ -1,8 +1,6 @@
 # modules/gke/main.tf
 # Node SA is created in bootstrap-iam; this module only attaches it to node pools.
 
-# tfsec:ignore:google-gke-enable-network-policy
-# tfsec:ignore:google-gke-enforce-pod-security-policy
 resource "google_container_cluster" "primary" {
   project             = var.project_id
   name                = var.cluster_name

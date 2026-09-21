@@ -28,3 +28,8 @@ variable "subnet_id" {
   description = "The ID (self_link) of the private subnet where the runner will be placed"
   type        = string
 }
+
+variable "disk_kms_key_id" {
+  description = "Full id of the Cloud KMS key that encrypts the runner boot disk. create-bucket.sh creates runner-disk-key."
+  type        = string
+}

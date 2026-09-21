@@ -18,6 +18,7 @@
 #   - two conditioned projectIamAdmin bindings (each hasOnly list is at most 10 roles)
 #   - bucket roles/storage.objectAdmin only (not storage.admin), for terraform-sa
 #     and for github-infra-runner-sa-<env> (member may not exist yet)
+#   - roles/cloudkms.cryptoKeyEncrypterDecrypter on runner-disk-key (create-bucket.sh)
 #   - TokenCreator for YOUR_USER_EMAIL on terraform-sa
 #
 # Also creates project custom roles (terraform-sa has no roles/iam.roleAdmin):
@@ -284,6 +285,17 @@ for member in "serviceAccount:${SA_EMAIL}" "serviceAccount:${RUNNER_SA_EMAIL}"; 
     --role="roles/storage.objectAdmin" \
     --quiet >/dev/null
 done
+
+echo "---"
+echo "Granting terraform-sa encrypt/decrypt on the runner boot disk key..."
+DISK_KEY_LOCATION="${REGION:-europe-west1}"
+gcloud kms keys add-iam-policy-binding "runner-disk-key" \
+  --keyring="terraform-state-keyring" \
+  --location="${DISK_KEY_LOCATION}" \
+  --project="${PROJECT_ID}" \
+  --member="serviceAccount:${SA_EMAIL}" \
+  --role="roles/cloudkms.cryptoKeyEncrypterDecrypter" \
+  --quiet >/dev/null
 
 echo "---"
 echo "Granting YOU ($YOUR_USER_EMAIL) permission to impersonate this SA..."

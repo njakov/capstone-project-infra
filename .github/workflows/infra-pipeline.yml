@@ -45,7 +45,7 @@ concurrency:
 jobs:
   setup:
     name: Setup Context
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       runner_label: ${{ steps.set-context.outputs.runner_label }}
       work_dir: ${{ steps.set-context.outputs.work_dir }}
@@ -257,8 +257,27 @@ jobs:
       - name: Run TFLint
         run: tflint --init && tflint
 
-      - name: Run TFSec
-        run: tfsec . --tfvars-file terraform.tfvars
+      - name: Run Trivy
+        run: |
+          # v0.74.0. The current VM was built before this pin; new VMs install it in startup.sh.
+          if ! command -v trivy >/dev/null 2>&1; then
+            workdir="$(mktemp -d)"
+            archive="${workdir}/trivy.tar.gz"
+            curl -fsSL -o "${archive}" "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz"
+            echo "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a  ${archive}" | sha256sum -c -
+            tar -xzf "${archive}" -C "${workdir}"
+            mkdir -p "${HOME}/.local/bin"
+            install -m 0755 "${workdir}/trivy" "${HOME}/.local/bin/trivy"
+            rm -rf "${workdir}"
+            export PATH="${HOME}/.local/bin:${PATH}"
+          fi
+          trivy config \
+            --exit-code 1 \
+            --severity LOW,MEDIUM,HIGH,CRITICAL \
+            --skip-dirs .terraform \
+            --skip-version-check \
+            --tf-vars terraform.tfvars \
+            .
 
   # Plan
   plan:

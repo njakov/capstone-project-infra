@@ -86,7 +86,7 @@ if ! command -v kubectl &> /dev/null; then
     apt-get install -y google-cloud-cli google-cloud-cli-gke-gcloud-auth-plugin kubectl
 fi
 
-# 6. Install Helm, TFLint, and tfsec from pinned archives.
+# 6. Install Helm, TFLint, and Trivy from pinned archives.
 # Checksums are the upstream release digests. Do not pipe remote installers.
 install_pinned_archive() {
   local url="$1"
@@ -136,13 +136,13 @@ if ! command -v tflint &> /dev/null; then
     "tflint"
 fi
 
-if ! command -v tfsec &> /dev/null; then
-  echo "Installing tfsec v1.28.14..."
+if ! command -v trivy &> /dev/null; then
+  echo "Installing Trivy v0.74.0..."
   install_pinned_archive \
-    "https://github.com/aquasecurity/tfsec/releases/download/v1.28.14/tfsec_1.28.14_linux_amd64.tar.gz" \
-    "329ae7f67f2f1813ebe08de498719ea7003c75d3ca24bb0b038369062508008e" \
-    "tfsec.tar.gz" \
-    "tfsec"
+    "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz" \
+    "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a" \
+    "trivy.tar.gz" \
+    "trivy"
 fi
 
 # 7. Configure Docker Auth
