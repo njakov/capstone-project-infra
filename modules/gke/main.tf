@@ -49,8 +49,16 @@ resource "google_container_cluster" "primary" {
 
   master_authorized_networks_config {
     cidr_blocks {
-      display_name = "private-subnet"
+      display_name = "app-private-subnet"
       cidr_block   = var.subnet_ip_cidr_range
+    }
+
+    dynamic "cidr_blocks" {
+      for_each = var.additional_master_authorized_networks
+      content {
+        display_name = cidr_blocks.value.display_name
+        cidr_block   = cidr_blocks.value.cidr_block
+      }
     }
   }
 

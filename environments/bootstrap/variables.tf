@@ -21,19 +21,21 @@ variable "env" {
 }
 
 variable "subnet_cidr" {
-  description = "The IP range for the private subnet"
+  description = "App VPC private subnet CIDR (distinct per env in this project)"
   type        = string
-  default     = "10.10.0.0/24"
 }
 
 variable "pods_cidr" {
-  description = "The secondary IP range for Pods"
+  description = "App VPC secondary range for GKE pods"
   type        = string
-  default     = "10.20.0.0/16"
 }
 
 variable "services_cidr" {
-  description = "The secondary IP range for Services"
+  description = "App VPC secondary range for GKE services"
   type        = string
-  default     = "10.30.0.0/16"
+}
+
+variable "infra_subnet_cidr" {
+  description = "Infra VPC private subnet CIDR for GCE runners (distinct per env)"
+  type        = string
 }

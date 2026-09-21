@@ -1,8 +1,8 @@
-# Service Account for the Runner
+# Service Account for the infra Terraform runner (powerful by design — see ADR)
 resource "google_service_account" "runner_sa" {
   project      = var.project_id
-  account_id   = "github-runner-sa-${var.env}"
-  display_name = "GitHub Runner Service Account for ${var.env} environment"
+  account_id   = "github-infra-runner-sa-${var.env}"
+  display_name = "GitHub Infra Runner Service Account for ${var.env}"
 }
 
 locals {
@@ -12,7 +12,7 @@ locals {
     "roles/cloudsql.admin",                    # To manage Cloud SQL
     "roles/secretmanager.admin",               # To manage Secrets
     "roles/iam.serviceAccountUser",            # To attach SAs to GKE nodes/VMs
-    "roles/resourcemanager.projectIamAdmin",   # To grant IAM bindings
+    "roles/resourcemanager.projectIamAdmin",   # To grant IAM bindings (documented accepted risk)
     "roles/serviceusage.serviceUsageConsumer", # To enable APIs
     "roles/iam.serviceAccountAdmin",
     "roles/artifactregistry.admin"
@@ -38,7 +38,7 @@ resource "google_storage_bucket_iam_member" "runner_state_access" {
 # tfsec:ignore:google-compute-no-project-wide-ssh-keys
 resource "google_compute_instance" "runner" {
   project      = var.project_id
-  name         = "runner-vm-${var.env}"
+  name         = "runner-vm-infra-${var.env}"
   machine_type = "e2-standard-2"
   zone         = var.zone
 
@@ -72,5 +72,6 @@ resource "google_compute_instance" "runner" {
 
   metadata_startup_script = file("${path.module}/startup.sh")
 
-  tags = ["private-runner"]
+  # Register in GitHub with labels: self-hosted, infra, {env}
+  tags = ["infra-runner"]
 }
