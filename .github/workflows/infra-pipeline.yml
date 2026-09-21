@@ -171,7 +171,7 @@ jobs:
         working-directory: ${{ needs.setup.outputs.work_dir }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
 
@@ -237,7 +237,7 @@ jobs:
           echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV   
 
       - name: Cache Terraform Plugins
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.terraform.d/plugin-cache
           key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
@@ -258,7 +258,7 @@ jobs:
         run: tflint --init && tflint
 
       - name: Run TFSec
-        run: tfsec .
+        run: tfsec . --tfvars-file terraform.tfvars
 
   # Plan
   plan:
@@ -275,7 +275,7 @@ jobs:
         working-directory: ${{ needs.setup.outputs.work_dir }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
 
@@ -326,7 +326,7 @@ jobs:
           echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV   
 
       - name: Cache Terraform Plugins
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.terraform.d/plugin-cache
           key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
@@ -374,7 +374,7 @@ jobs:
         working-directory: ${{ needs.setup.outputs.work_dir }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
 
@@ -428,7 +428,7 @@ jobs:
           echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV   
 
       - name: Cache Terraform Plugins
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.terraform.d/plugin-cache
           key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
@@ -472,7 +472,7 @@ jobs:
         working-directory: ${{ needs.setup.outputs.work_dir }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
 
@@ -523,7 +523,7 @@ jobs:
           echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV   
 
       - name: Cache Terraform Plugins
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.terraform.d/plugin-cache
           key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}

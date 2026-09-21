@@ -3,6 +3,9 @@
 
 # tfsec:ignore:google-gke-enable-network-policy
 # tfsec:ignore:google-gke-enforce-pod-security-policy
+# Labels are var.labels. The variable default and both environments pass a map.
+# tfsec still reports this because it does not count a variable reference.
+# tfsec:ignore:google-gke-use-cluster-labels
 resource "google_container_cluster" "primary" {
   project             = var.project_id
   name                = var.cluster_name
