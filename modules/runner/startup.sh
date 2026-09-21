@@ -86,16 +86,64 @@ if ! command -v kubectl &> /dev/null; then
     apt-get install -y google-cloud-cli google-cloud-cli-gke-gcloud-auth-plugin kubectl
 fi
 
-# 6. Install Helm
+# 6. Install Helm, TFLint, and tfsec from pinned archives.
+# Checksums are the upstream release digests. Do not pipe remote installers.
+install_pinned_archive() {
+  local url="$1"
+  local sha256="$2"
+  local archive_name="$3"
+  local binary_name="$4"
+  local workdir archive binary
+
+  workdir="$(mktemp -d)"
+  archive="${workdir}/${archive_name}"
+  curl -fsSL -o "${archive}" "${url}"
+  echo "${sha256}  ${archive}" | sha256sum -c -
+  case "${archive_name}" in
+    *.zip) unzip -q "${archive}" -d "${workdir}" ;;
+    *.tar.gz|*.tgz) tar -xzf "${archive}" -C "${workdir}" ;;
+    *)
+      echo "Unsupported archive ${archive_name}" >&2
+      rm -rf "${workdir}"
+      exit 1
+      ;;
+  esac
+  binary="$(find "${workdir}" -type f -name "${binary_name}" -print -quit)"
+  if [ -z "${binary}" ]; then
+    echo "Binary ${binary_name} not found in ${url}" >&2
+    rm -rf "${workdir}"
+    exit 1
+  fi
+  install -m 0755 "${binary}" "/usr/local/bin/${binary_name}"
+  rm -rf "${workdir}"
+}
+
 if ! command -v helm &> /dev/null; then
-    echo "Installing Helm..."
-    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  echo "Installing Helm v3.17.3..."
+  install_pinned_archive \
+    "https://get.helm.sh/helm-v3.17.3-linux-amd64.tar.gz" \
+    "ee88b3c851ae6466a3de507f7be73fe94d54cbf2987cbaa3d1a3832ea331f2cd" \
+    "helm.tgz" \
+    "helm"
 fi
 
-# 7. Install Security Scanners
-echo "Installing Scanners..."
-curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
-curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+if ! command -v tflint &> /dev/null; then
+  echo "Installing TFLint v0.58.1..."
+  install_pinned_archive \
+    "https://github.com/terraform-linters/tflint/releases/download/v0.58.1/tflint_linux_amd64.zip" \
+    "2fea1af8e8602d4d9e4253a588ac66f17bf36152cafb51f4d929b8bc6335e740" \
+    "tflint.zip" \
+    "tflint"
+fi
+
+if ! command -v tfsec &> /dev/null; then
+  echo "Installing tfsec v1.28.14..."
+  install_pinned_archive \
+    "https://github.com/aquasecurity/tfsec/releases/download/v1.28.14/tfsec_1.28.14_linux_amd64.tar.gz" \
+    "329ae7f67f2f1813ebe08de498719ea7003c75d3ca24bb0b038369062508008e" \
+    "tfsec.tar.gz" \
+    "tfsec"
+fi
 
 # 7. Configure Docker Auth
 echo "Configuring Docker Auth..."

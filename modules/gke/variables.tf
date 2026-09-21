@@ -208,3 +208,9 @@ variable "runner_image_type" {
   description = "Image type for runner nodes. COS_CONTAINERD is preferred for non-privileged Kaniko builds."
   default     = "COS_CONTAINERD"
 }
+
+variable "deletion_protection" {
+  type        = bool
+  description = "When true, Terraform refuses to destroy this cluster. Set false and apply before an intentional destroy."
+  default     = true
+}

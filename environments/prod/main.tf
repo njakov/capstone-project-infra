@@ -88,6 +88,7 @@ module "cloud_sql" {
 
   network_name              = module.app_network.network_name
   app_service_account_email = local.app_sa_email
+  deletion_protection       = var.deletion_protection
 }
 
 # ------------------------------------------------------------------------------
@@ -123,6 +124,7 @@ module "gke" {
   node_locations         = var.gke_node_locations
   maintenance_start_time = var.gke_maintenance_start_time
   master_ipv4_cidr_block = var.master_ipv4_cidr_block
+  deletion_protection    = var.deletion_protection
 
   # Dedicated tainted pool for ARC ephemeral runners (Kaniko-friendly COS)
   enable_runner_node_pool = true
@@ -148,6 +150,7 @@ module "artifact_registry" {
   region        = var.region
   repository_id = "${var.app_name}-repo-${var.env}"
   writer_member = "serviceAccount:${local.app_runner_sa_email}"
+  reader_member = "serviceAccount:${local.node_sa_email}"
 }
 
 # ------------------------------------------------------------------------------
@@ -181,6 +184,12 @@ module "arc" {
   install_charts                = var.arc_install_charts
   min_runners                   = var.arc_min_runners
   max_runners                   = var.arc_max_runners
+  https_egress_except_cidrs = [
+    var.subnet_cidr,
+    var.pods_cidr,
+    var.services_cidr,
+    data.google_compute_subnetwork.infra_subnet.ip_cidr_range,
+  ]
 }
 
 # ------------------------------------------------------------------------------

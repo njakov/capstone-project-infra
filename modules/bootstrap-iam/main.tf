@@ -9,10 +9,12 @@ locals {
   # Must match environments/{dev,prod} cloud_sql db_instance_name.
   cloud_sql_instance_name = "${var.app_name}-db-${var.env}"
 
+  # artifactregistry.reader is repo-scoped in modules/artifact-registry.
+  # The role stays on terraform-sa-binder-workload so bootstrap can revoke a
+  # leftover project-level grant.
   node_sa_roles = toset([
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
-    "roles/artifactregistry.reader",
   ])
 
   # arcAppDeploy is created by scripts/setup-terraform-sa.sh.

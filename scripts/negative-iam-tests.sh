@@ -6,10 +6,11 @@
 # Example: ./scripts/negative-iam-tests.sh dev
 #
 # Expects PERMISSION_DENIED for bind/create cases. Run after setup_gcp + bootstrap
-# with terraform-sa still enabled (tests 1–2) and the infra / app-runner SAs
-# present (tests 3–4). Test 4 fails until bootstrap-env.sh revokes the leftover
-# project-level Artifact Registry writer. Do not treat success as a green CI
-# gate — these are manual / demo checks.
+# with terraform-sa still enabled (tests 1–2) and the infra / app-runner / node
+# SAs present (tests 3–5). Tests 4–5 fail until bootstrap-env.sh revokes leftover
+# project-level Artifact Registry bindings. Each impersonated test first checks
+# that the caller can mint a token for that service account. Do not treat
+# success as a green CI gate — these are manual / demo checks.
 #
 # Identifiers (override via env if needed):
 #   PROJECT_ID — else project_id from environments/bootstrap/<env>.tfvars
@@ -40,7 +41,48 @@ resolve_user_email
 TF_SA="terraform-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 RUNNER_SA="github-infra-runner-sa-${ENV}@${PROJECT_ID}.iam.gserviceaccount.com"
 APP_RUNNER_SA="github-app-runner-sa-${ENV}@${PROJECT_ID}.iam.gserviceaccount.com"
+APP_NAME="$(tfvars_get app_name "$TFVARS_FILE" || true)"
+if [ -z "${APP_NAME}" ]; then
+  echo "Error: app_name is missing from ${TFVARS_FILE}"
+  exit 1
+fi
+NODE_SA="${APP_NAME}-gke-${ENV}-node-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 REGION="${REGION:-europe-west1}"
+
+# Fail closed when the caller cannot act as the service account. A
+# PERMISSION_DENIED from a failed impersonation is not evidence the target API
+# denied that account.
+require_impersonation() {
+  local sa="$1"
+  local err_file token status payload email
+
+  echo ""
+  echo "=== Impersonation preflight: ${sa} ==="
+  err_file="$(mktemp)"
+  set +e
+  token="$(gcloud auth print-identity-token --impersonate-service-account="${sa}" 2>"${err_file}")"
+  status=$?
+  set -e
+  if [ "${status}" -ne 0 ] || [ -z "${token}" ]; then
+    echo "FAIL: cannot impersonate ${sa}."
+    cat "${err_file}"
+    rm -f "${err_file}"
+    return 1
+  fi
+  rm -f "${err_file}"
+
+  email="$(printf '%s' "${token}" | python3 -c 'import base64, json, sys
+raw = sys.stdin.read().strip().split(".")[1]
+raw = raw.replace("-", "+").replace("_", "/")
+raw += "=" * (-len(raw) % 4)
+print(json.loads(base64.b64decode(raw)).get("email", ""))')"
+  unset token
+  if [ "${email}" != "${sa}" ]; then
+    echo "FAIL: impersonated identity is '${email}', expected '${sa}'."
+    return 1
+  fi
+  echo "OK: caller can impersonate ${sa}."
+}
 
 expect_denied() {
   local label="$1"
@@ -51,6 +93,11 @@ expect_denied() {
   output="$("$@" 2>&1)"
   status=$?
   set -e
+  if echo "${output}" | grep -Eqi 'Failed to impersonate|Unable to impersonate|iam.serviceAccounts.getAccessToken|iam.serviceAccounts.getOpenIdToken'; then
+    echo "FAIL: impersonation failed. This does not prove the target API denied the service account."
+    echo "${output}"
+    return 1
+  fi
   if echo "${output}" | grep -Eqi 'PERMISSION_DENIED|AccessDeniedException|does not have permission|Caller does not have permission'; then
     echo "OK: got PERMISSION_DENIED as expected."
     return 0
@@ -100,46 +147,52 @@ expect_no_project_role() {
 
 failures=0
 
-# 1) terraform-sa must not bind roles/owner (off the binder allow-list).
-if ! expect_denied \
-  "1. Impersonate terraform-sa → bind roles/owner" \
-  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-    --member="user:${YOUR_USER_EMAIL}" \
-    --role="roles/owner" \
-    --impersonate-service-account="${TF_SA}" \
-    --condition=None; then
+if ! require_impersonation "${TF_SA}"; then
   failures=$((failures + 1))
-fi
+else
+  # 1) terraform-sa must not bind roles/owner (off the binder allow-list).
+  if ! expect_denied \
+    "1. Impersonate terraform-sa → bind roles/owner" \
+    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+      --member="user:${YOUR_USER_EMAIL}" \
+      --role="roles/owner" \
+      --impersonate-service-account="${TF_SA}" \
+      --condition=None; then
+    failures=$((failures + 1))
+  fi
 
-# 2) terraform-sa must not create GKE / SQL (no container.admin / cloudsql.admin).
-#    --dry-run so a mistaken grant does not leave a cluster or instance behind.
-if ! expect_denied \
-  "2a. Impersonate terraform-sa → gcloud container clusters create --dry-run" \
-  gcloud container clusters create "neg-test-denied" \
-    --project="${PROJECT_ID}" \
-    --region="${REGION}" \
-    --num-nodes=1 \
-    --impersonate-service-account="${TF_SA}" \
-    --dry-run \
-    --quiet; then
-  failures=$((failures + 1))
-fi
+  # 2) terraform-sa must not create GKE / SQL (no container.admin / cloudsql.admin).
+  #    --dry-run so a mistaken grant does not leave a cluster or instance behind.
+  if ! expect_denied \
+    "2a. Impersonate terraform-sa → gcloud container clusters create --dry-run" \
+    gcloud container clusters create "neg-test-denied" \
+      --project="${PROJECT_ID}" \
+      --region="${REGION}" \
+      --num-nodes=1 \
+      --impersonate-service-account="${TF_SA}" \
+      --dry-run \
+      --quiet; then
+    failures=$((failures + 1))
+  fi
 
-if ! expect_denied \
-  "2b. Impersonate terraform-sa → gcloud sql instances create --dry-run" \
-  gcloud sql instances create "neg-test-denied" \
-    --project="${PROJECT_ID}" \
-    --database-version=MYSQL_8_0 \
-    --tier=db-f1-micro \
-    --region="${REGION}" \
-    --impersonate-service-account="${TF_SA}" \
-    --dry-run \
-    --quiet; then
-  failures=$((failures + 1))
+  if ! expect_denied \
+    "2b. Impersonate terraform-sa → gcloud sql instances create --dry-run" \
+    gcloud sql instances create "neg-test-denied" \
+      --project="${PROJECT_ID}" \
+      --database-version=MYSQL_8_0 \
+      --tier=db-f1-micro \
+      --region="${REGION}" \
+      --impersonate-service-account="${TF_SA}" \
+      --dry-run \
+      --quiet; then
+    failures=$((failures + 1))
+  fi
 fi
 
 # 3) Runner must not setIamPolicy on terraform-sa (D6: no SA admin on terraform-sa).
-if ! expect_denied \
+if ! require_impersonation "${RUNNER_SA}"; then
+  failures=$((failures + 1))
+elif ! expect_denied \
   "3. Impersonate runner → setIamPolicy on terraform-sa" \
   gcloud iam service-accounts add-iam-policy-binding "${TF_SA}" \
     --project="${PROJECT_ID}" \
@@ -155,6 +208,15 @@ if ! expect_no_project_role \
   "4. github-app-runner-sa-${ENV} has no project-level artifactregistry.writer" \
   "serviceAccount:${APP_RUNNER_SA}" \
   "roles/artifactregistry.writer"; then
+  failures=$((failures + 1))
+fi
+
+# 5) Node SA must not have project-level artifactregistry.reader.
+#    The live grant is repository IAM in modules/artifact-registry.
+if ! expect_no_project_role \
+  "5. ${APP_NAME}-gke-${ENV}-node-sa has no project-level artifactregistry.reader" \
+  "serviceAccount:${NODE_SA}" \
+  "roles/artifactregistry.reader"; then
   failures=$((failures + 1))
 fi
 

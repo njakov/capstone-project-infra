@@ -32,8 +32,9 @@ TERRAFORM_SA_ROLES=(
 # Do not add owner/editor/projectIamAdmin/securityAdmin/serviceAccountUser/Admin.
 # container.developer stays on the scoped list so bootstrap can revoke the old
 # app-runner binding. It is not granted to any member.
-# artifactregistry.writer stays on the workload list so bootstrap can revoke a
-# leftover project-level grant; the live grant is repo-scoped.
+# artifactregistry.reader and artifactregistry.writer stay on the workload list
+# so bootstrap can revoke leftover project-level grants. Live grants are
+# repository IAM in modules/artifact-registry.
 # arcAppDeploy is appended in the scoped expression.
 TERRAFORM_SA_IAM_BINDER_WORKLOAD=(
   "roles/compute.networkAdmin"

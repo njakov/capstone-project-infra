@@ -223,7 +223,9 @@ jobs:
           if grep -R --include='*.tf' --exclude-dir=.terraform -n 'google_project_iam_' \
             environments/dev environments/prod \
             modules/gke modules/identity modules/cloud-sql \
-            modules/arc modules/external-secrets; then
+            modules/arc modules/external-secrets \
+            modules/artifact-registry modules/middleware \
+            modules/network modules/network-peering; then
             echo "::error::Day-2 paths must not declare google_project_iam_* (project IAM is bootstrap-only)"
             exit 1
           fi

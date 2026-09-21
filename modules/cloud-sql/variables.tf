@@ -62,3 +62,9 @@ variable "app_service_account_email" {
   type        = string
   description = "The email of the application service account to grant secret access to."
 }
+
+variable "deletion_protection" {
+  type        = bool
+  description = "When true, Terraform and Cloud SQL refuse to destroy this instance. Set false and apply before an intentional destroy."
+  default     = true
+}

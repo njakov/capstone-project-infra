@@ -219,9 +219,10 @@ resource "helm_release" "arc_runners" {
 
 # ------------------------------------------------------------------------------
 # Demo-quality NetworkPolicies (Dataplane V2)
-# Primary isolation: default-deny in arc-runners; allow DNS, HTTPS, the API server,
-# and the GKE metadata server (Workload Identity).
-# Pod-to-pod HTTP to PetClinic ClusterIPs is denied by omission.
+# Primary isolation: default-deny in arc-runners; allow DNS, the metadata server,
+# and TCP/443 and TCP/6443 to everywhere except the private app and infra CIDRs.
+# The GKE master CIDR is not in that exception list. Pod-to-pod HTTP to
+# PetClinic ClusterIPs is denied by omission.
 # ------------------------------------------------------------------------------
 resource "kubernetes_network_policy_v1" "arc_runners_default_deny" {
   count = var.install_charts ? 1 : 0
@@ -261,6 +262,12 @@ resource "kubernetes_network_policy_v1" "arc_runners_allow_egress" {
     }
 
     egress {
+      to {
+        ip_block {
+          cidr   = "0.0.0.0/0"
+          except = var.https_egress_except_cidrs
+        }
+      }
       ports {
         protocol = "TCP"
         port     = "443"
@@ -268,6 +275,12 @@ resource "kubernetes_network_policy_v1" "arc_runners_allow_egress" {
     }
 
     egress {
+      to {
+        ip_block {
+          cidr   = "0.0.0.0/0"
+          except = var.https_egress_except_cidrs
+        }
+      }
       ports {
         protocol = "TCP"
         port     = "6443"
@@ -334,6 +347,12 @@ resource "kubernetes_network_policy_v1" "arc_systems_allow_egress" {
     }
 
     egress {
+      to {
+        ip_block {
+          cidr   = "0.0.0.0/0"
+          except = var.https_egress_except_cidrs
+        }
+      }
       ports {
         protocol = "TCP"
         port     = "443"
@@ -341,6 +360,12 @@ resource "kubernetes_network_policy_v1" "arc_systems_allow_egress" {
     }
 
     egress {
+      to {
+        ip_block {
+          cidr   = "0.0.0.0/0"
+          except = var.https_egress_except_cidrs
+        }
+      }
       ports {
         protocol = "TCP"
         port     = "6443"
