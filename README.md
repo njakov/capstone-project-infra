@@ -8,7 +8,7 @@ This repository is a part of the DevOps Capstone Project for DevOps Internship i
 
 Here, you can find the code for:
 * Creating Self-Hosted GitHub Actions Runners (infra GCE + ARC foundation)
-* Dev & Production Environment Provisioning
+* Dev & Production Environment Provisioning (**one GCP project per env**)
 * Custom Modules Repository
 * Architecture Diagram
 * Architecture Decision Records ([docs/adr](docs/adr/))
@@ -21,10 +21,10 @@ For more details, please refer to:
 
 ## Project Overview
 
-* **Cloud Provider:** Google Cloud Platform (GCP) 
-* **Infrastructure Tool:** Terraform (State stored in GCS with versioning)
-* **Orchestrator:** Google Kubernetes Engine (GKE) - Private Cluster
-* **Database:** Cloud SQL (MySQL) - Private IP only
+* **Cloud Provider:** Google Cloud Platform (GCP) — **PetClinic Dev** and **PetClinic Prod** are separate projects
+* **Infrastructure Tool:** Terraform (State stored in GCS with versioning; one bucket per project)
+* **Orchestrator:** Google Kubernetes Engine (GKE) - Private Cluster (zonal small dev / regional HA prod)
+* **Database:** Cloud SQL (MySQL) - Private IP only (`ZONAL` `db-f1-micro` in dev; `REGIONAL` `db-g1-small` in prod)
 * **Secrets Management:** Google Secret Manager
 * **CI/CD:** GitHub Actions — infra on GCE runners (`self-hosted,infra,{env}`); app CI on ARC (ephemeral) after cutover
 * **Configuration Management:** Helm 
@@ -48,14 +48,15 @@ For more details, please refer to:
 │   ├── arc-cutover.md       # ARC cutover notes
 │   └── monitoring.md        # Prometheus/Grafana scrape & demo path
 ├── environments/
-│   ├── bootstrap/           # Infra VPC + app VPC + peering + infra runner
-│   ├── dev/                 # Development environment entry point
-│   └── prod/                # Production environment entry point
+│   ├── bootstrap/           # Infra VPC + runner + bootstrap-iam (chicken-egg only)
+│   ├── dev/                 # Dev env: app VPC + peering + GKE/SQL/…
+│   └── prod/                # Prod env (same shape; HA sizing in tfvars)
 ├── modules/                 # Reusable Terraform modules
 │   ├── artifact-registry/   # Docker container storage
+│   ├── bootstrap-iam/       # Workload SAs + project IAM + D6 grants
 │   ├── cloud-sql/           # Managed MySQL database
 │   ├── gke/                 # Kubernetes Cluster configuration
-│   ├── identity/            # App SA + ARC app-runner SA (Workload Identity)
+│   ├── identity/            # Workload Identity only (no project IAM)
 │   ├── middleware/          # Helm charts (Ingress, Prometheus)
 │   ├── network/             # VPC, Subnets, Firewalls, NAT
 │   ├── network-peering/     # Bidirectional VPC peering (infra ↔ app)
@@ -67,27 +68,28 @@ For more details, please refer to:
 
 ## Architecture
 
-The infrastructure follows a modular design with environment separation (`dev`, `prod`) and a bootstrap layer that splits **infra** and **app** networking.
+Bootstrap is **chicken-egg only**: infra VPC + NAT + IAP SSH + runner SA/VM + workload SAs/project IAM. The **env** apply creates the app VPC, both peering legs, then GKE/SQL/middleware. Isolation is a **project boundary** (dev ≠ prod GCP project), not IAM Conditions on `container.admin`.
 
-See [ADR 001: Runner isolation](docs/adr/001-runner-isolation.md) for locked decisions, accepted risks, and references. Regenerate [`.github/assets/architecture-diagram.png`](.github/assets/architecture-diagram.png) after cutover to match this layout.
+See [ADR 001: Runner isolation](docs/adr/001-runner-isolation.md) for locked decisions, residuals, sizing, and trial runtime. Regenerate [`.github/assets/architecture-diagram.png`](.github/assets/architecture-diagram.png) after cutover to match this layout.
 
 ### Key Components
 1.  **Network (`modules/network` + `modules/network-peering`):**
-    * **App VPC:** private subnet + GKE secondary ranges (pods/services). Distinct CIDRs per env in the shared GCP project.
-    * **Infra VPC:** private subnet for GCE infra runners only; IAP SSH scoped to the `infra-runner` tag.
-    * **Peering:** bidirectional peering with custom-route import/export so infra runners reach the private GKE API.
+    * **Infra VPC (bootstrap):** private subnet for the GCE infra runner; IAP SSH scoped to the `infra-runner` tag.
+    * **App VPC (env):** private subnet + GKE secondary ranges (pods/services). Distinct CIDRs per env/project.
+    * **Peering (env):** bidirectional peering with custom-route import/export so infra runners reach the private GKE API. Verify with `gcloud compute networks peerings list` before assuming Helm can talk to the API.
     * **Cloud NAT:** private nodes/VMs egress without public IPs.
 2.  **Compute (`modules/gke`, `modules/runner`, `modules/arc`):**
-    * **GKE:** Private cluster with VPC-native networking. Master authorized networks include the app subnet **and** the infra runner subnet. Second node pool `runners` is tainted (`github.runner=true:NoSchedule`) and labeled `workload=github-runner` for ARC only.
-    * **Infra GitHub Runner:** GCE VM `runner-vm-infra-{env}` on the infra VPC. Register with labels `self-hosted`, `infra`, `{env}`. Pre-installed: Docker (group-based socket access), Terraform, Helm, Java, TFSec/TFLint.
-    * **ARC:** ephemeral app runners (`petclinic-arc-{env}`) in the same GKE cluster via `modules/arc`, using least-privilege `github-app-runner-sa-{env}` Workload Identity. Demo NetworkPolicies default-deny in `arc-runners` / `arc-systems` with DNS+HTTPS egress. Cutover steps: [docs/arc-cutover.md](docs/arc-cutover.md).
+    * **GKE:** Private cluster with VPC-native networking on the **app** VPC. Master authorized networks include the app subnet **and** the infra runner subnet. Second node pool `runners` is tainted (`github.runner=true:NoSchedule`) and labeled `workload=github-runner` for ARC only. Dev is **zonal**; prod is **regional** (two zones) — see ADR sizing table.
+    * **Infra GitHub Runner:** GCE VM `runner-vm-infra-{env}` on the infra VPC (`e2-medium`). Register with labels `self-hosted`, `infra`, `{env}`. Day-2 path is Terraform-only (no Docker builds required on this VM).
+    * **ARC:** ephemeral app runners (`petclinic-arc-{env}`) in the same GKE cluster via `modules/arc`, using least-privilege `github-app-runner-sa-{env}` Workload Identity. Cutover steps: [docs/arc-cutover.md](docs/arc-cutover.md).
 3.  **Database (`modules/cloud-sql`):**
-    * Cloud SQL (MySQL 8.0) connected via Private Service Access (VPC Peering) on the **app** VPC.
+    * Cloud SQL (MySQL 8.0) connected via Private Service Access on the **app** VPC.
     * Passwords are generated randomly and stored immediately in **Google Secret Manager**.
-4.  **Security:**
-    * **Workload Identity:** App pods in namespace `petclinic` use K8s SA `petclinic` mapped to `petclinic-sa-{env}` (binding `petclinic/petclinic`). ARC runners use a separate least-privilege GCP SA.
-    * **IAM split:** infra SA can Terraform (including `projectIamAdmin`, documented); ARC app-runner SA can only write Artifact Registry and deploy to GKE — no state/network/IAM admin.
-    * **Secret Manager:** Centralized management for DB credentials and URLs.
+4.  **Security / IAM:**
+    * **Workload Identity:** App pods in namespace `petclinic` use K8s SA `petclinic` mapped to `petclinic-sa-{env}`. ARC runners use a separate least-privilege GCP SA. Identity module is **WI-only** (no day-2 `google_project_iam_*`).
+    * **`terraform-sa`:** conditioned `projectIamAdmin` binder for bootstrap only; **disabled** after bootstrap (`scripts/lock-terraform-sa.sh`). No project-level `serviceAccountUser`; state bucket is `storage.objectAdmin` only.
+    * **`github-infra-runner-sa-{env}`:** day-2 apply identity — workload `*admin` + `networkAdmin` inside its project; **no** `projectIamAdmin` / project SA admin/user. Resource-level D6 grants from bootstrap (SA admin on app + app-runner; SA user on node SA).
+    * **Secret Manager:** Centralized management for DB credentials and URLs (infra runner has `secretmanager.admin` by design).
 
 ## Architecture Diagram
 ![Architecture Diagram](./.github/assets/architecture-diagram.png)
@@ -97,61 +99,125 @@ See [ADR 001: Runner isolation](docs/adr/001-runner-isolation.md) for locked dec
 
 ### Prerequisites  
 
-1.  **GCP Project:** You must have a Google Cloud Project ID (e.g., `my-gcp-project`).  
-2.  **Google Cloud SDK:** Installed and authenticated locally.  
-3.  **Terraform:** Installed (v1.16.0).
+1.  **GCP projects:** Dev = existing `project-62ebde90-46b7-4e70-b59` (display name **PetClinic Dev**; ID immutable). Prod = **new** project (display name **PetClinic Prod**; ID `petclinic-gke-prod`). Never reuse the dev UUID.
+2.  **Google Cloud SDK:** Installed and authenticated locally (`gcloud auth login`).  
+3.  **Application Default Credentials (user):** `gcloud auth application-default login` — as **your user**, without `--impersonate`. Bootstrap then forces Terraform to act as `terraform-sa` via impersonation.  
+4.  **Terraform:** Installed (v1.16.0).
 
-### Step 1: Initial GCP Setup  
-Run the setup script to enable required APIs (KMS, Storage, IAM), create the Terraform State Bucket, and set up the Service Account with necessary permissions. 
- 
+### Terraform authentication (two principals)
+
+| Stage | Principal | How |
+|-------|-----------|-----|
+| One-time `setup_gcp.sh` / `gcloud` in scripts | Your user (Owner) | `gcloud auth login` |
+| Local `bootstrap-env.sh` Terraform | `terraform-sa@PROJECT.iam.gserviceaccount.com` | User ADC + `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT` (enforced by the script) and bootstrap `provider.tf` `impersonate_service_account` |
+| Day-2 `infra-pipeline.yml` | `github-infra-runner-sa-{env}` on the GCE VM | Attached service account / metadata — **not** `terraform-sa`, no laptop ADC |
+
+No SA JSON keys. CI does **not** use `terraform-sa`; that SA is for chicken-egg local bootstrap (and optional break-glass). Details: [ADR 001](docs/adr/001-runner-isolation.md).
+
+### Destroy-old-shape warning
+
+If live bootstrap state still owns `module.app_network` / peering, **do not** apply the slim bootstrap onto it — that deletes the app VPC under GKE. Destroy **env first**, then bootstrap, on the old shape; merge/apply the new code only on a clean project. Tear-down order is always **env → bootstrap**.
+
+### Trial / screenshot window
+
+* Dev may stay live up to ~1 week. Prod is a **2–3 day screenshot window** — destroy **env the same day** shots finish (regional GKE fee ticks from cluster create until delete), then destroy bootstrap. Do not leave both stacks always-on.
+
+### Step 1: Initial GCP Setup (per project)
+
+Run once per GCP project (pass `dev` or `prod`). Enables APIs, creates the state bucket, and configures `terraform-sa` with **conditioned** least-privilege IAM (`setup-terraform-sa.sh` is the only IAM writer).
+
 ```bash
 chmod +x scripts/setup_gcp.sh
-./scripts/setup_gcp.sh
+./scripts/setup_gcp.sh <ENV-NAME>
 ```
 
-*   **What this does:** This script executes create-bucket.sh to provision the GCS backend with versioning and setup-terraform-sa.sh to create the Service Account and assign IAM roles.
-    
+*   **What this does:** `create-bucket.sh` + `setup-terraform-sa.sh` (no unconditioned `projectIamAdmin`; bucket `objectAdmin` only; TokenCreator for your user on `terraform-sa`).
+*   Confirm before running (workspace rule). Target project comes from `environments/bootstrap/<env>.tfvars` unless `PROJECT_ID` is set.
 
-### Step 2: Bootstrap Environment (Networks & Infra Runner)
+### Step 2: Bootstrap (infra VPC + runner + workload IAM)
 
-Before deploying the application infrastructure, bootstrap the environment. This layer creates the **infra VPC**, **app VPC**, **peering**, and the **infra-only** Self-Hosted Runner VM.
+Chicken-egg layer only: **infra VPC**, runner SA/VM (`e2-medium`), and `bootstrap-iam` (workload SAs + project IAM + D6). **No** app VPC. **No** peering.
 
 ```bash
 chmod +x scripts/bootstrap-env.sh
 ./scripts/bootstrap-env.sh <ENV-NAME>
 ```
 
-*   **What this does:** Initializes Terraform in `environments/bootstrap` and applies the corresponding `.tfvars` file (e.g. `dev.tfvars`).
+*   **What this does:** Verifies `terraform-sa` exists and is **enabled**, then runs Terraform **as that SA** (fails closed if disabled). Applies `environments/bootstrap/<env>.tfvars` (`infra_subnet_cidr` only for networking). Does **not** grant IAM.
 *   **Output:** `runner_ssh_command` and `runner_registration_labels` (`self-hosted,infra,{env}`).
+*   **Lock after success:**
+
+```bash
+./scripts/lock-terraform-sa.sh <ENV-NAME>
+```
+
 *   **Manual step:** IAP SSH to the VM, switch to user `runner`, and register the GitHub Actions runner with those labels.
-*   **Migration note:** Prefer destroy/recreate bootstrap for `dev` if refactoring existing state is painful; see the ADR.
+*   **Break-glass:** enable `terraform-sa` → ensure TokenCreator on your user → bootstrap/destroy → lock again. See script header comments.
 
-### Step 3: Environment apply (GKE, middleware, ARC)
+### Step 3: Environment apply (app VPC, peering, GKE, middleware, ARC)
 
-After the infra runner is registered, apply `environments/{dev,prod}` (via `infra-pipeline` or from the runner).
+After the infra runner is registered, apply `environments/{dev,prod}` via `infra-pipeline` (as the runner SA).
 
-1. First apply with `enable_arc = true` and `arc_install_charts = false` creates the runner node pool and GitHub App **Secret Manager shells**.
+1. First apply creates the **app VPC**, both peering legs, then GKE/SQL/… Prefer verifying peering ACTIVE. With `enable_arc = true` and `arc_install_charts = false`, the runner node pool and GitHub App **Secret Manager shells** are created.
 2. Populate secret versions (App ID, installation ID, private key PEM) — see [docs/arc-cutover.md](docs/arc-cutover.md).
 3. Set `arc_install_charts = true` and apply again to install the controller, scale set, and NetworkPolicies.
 4. Confirm `petclinic-arc-{env}` appears under GitHub → Settings → Actions → Runners.
 
-### Step 4: Configure GitHub Actions variables
+First **prod** env apply budgets **45–90 minutes**.
 
-Project identifiers are **not** secrets. Add these as repository (or environment) **Actions variables** under Settings → Secrets and variables → Actions → Variables:
+### Step 4: Configure GitHub Environment variables
 
-*   `GCP_PROJECT_ID`: Your Project ID (e.g., `my-project-id`).
-*   `GCP_REGION`: The region for resources (e.g., `europe-west1`).
-*   `TF_STATE_BUCKET`: The GCS state bucket from Step 1 (e.g., `terraform-state-bucket-my-project-id`).
+`GCP_PROJECT_ID`, `GCP_REGION`, and `TF_STATE_BUCKET` must be **GitHub Environment** variables on Environments named `dev` and `prod` (Settings → Environments). `infra-pipeline.yml` sets `environment:` on **validate, plan, apply, and destroy** so those jobs resolve Environment-scoped `vars.*`.
 
-Keep authenticators as secrets (e.g. `TF_VAR_grafana_admin_password` when set). If you previously stored the three identifiers above as secrets, migrate them to variables and remove the secret copies so `infra-pipeline.yml` resolves `vars.*`.
+| Variable | Example (dev) | Example (prod) |
+|----------|---------------|----------------|
+| `GCP_PROJECT_ID` | `project-62ebde90-46b7-4e70-b59` | `petclinic-gke-prod` |
+| `GCP_REGION` | `europe-west1` | `europe-west1` |
+| `TF_STATE_BUCKET` | `terraform-state-bucket-project-62ebde90-46b7-4e70-b59` | `terraform-state-bucket-petclinic-gke-prod` |
+
+**Delete repo-level copies** of `GCP_PROJECT_ID` / `GCP_REGION` / `TF_STATE_BUCKET` once both Environments have them. A missing Environment var silently falls back to repo vars — a prod plan can then use the **dev** project because `TF_VAR_project_id` overrides tfvars.
+
+**Prod required reviewers:** reviewers on **apply-only** is fine. Putting `environment:` on plan/validate with required reviewers gates **every** prod plan — decide before the screenshot window.
+
+Keep authenticators as secrets (e.g. `TF_VAR_grafana_admin_password` when set). App-repo Environment vars for deploy workflows are a **separate PR** in `capstone-project-app`.
+
+```bash
+# After Environment vars exist for both env names:
+gh variable delete GCP_PROJECT_ID
+gh variable delete GCP_REGION
+gh variable delete TF_STATE_BUCKET
+```
+
+### Negative IAM tests (teaching demo)
+
+After setup + bootstrap (with `terraform-sa` still enabled for tests 1–2):
+
+```bash
+./scripts/negative-iam-tests.sh <ENV-NAME>
+```
+
+Expect `PERMISSION_DENIED` for: (1) terraform-sa binding `roles/owner`, (2) terraform-sa creating GKE/SQL, (3) runner `setIamPolicy` on terraform-sa. Confirm before running (live `gcloud` calls).
+
+### Local `terraform validate`
+
+```bash
+# Bootstrap
+(cd environments/bootstrap && terraform init -backend=false && terraform validate)
+
+# Dev / prod (placeholder project_id in prod tfvars is OK for validate)
+(cd environments/dev && terraform init -backend=false && terraform validate)
+(cd environments/prod && terraform init -backend=false && terraform validate)
+```
+
+CI also greps day-2 paths so they never reintroduce project IAM resources.
 
 ### Retarget GCP project
 
 When switching to a different GCP project:
 
-1. Edit committed tfvars `project_id` (and `allowed_source_ranges` / CIDRs as needed) in `environments/bootstrap/{dev,prod}.tfvars` and `environments/{dev,prod}/terraform.tfvars`. Placeholder shapes live in the matching `*.tfvars.example` files.
-2. Set GitHub Actions variables `GCP_PROJECT_ID`, `GCP_REGION`, and `TF_STATE_BUCKET` on this repo (and the matching `GCP_PROJECT_ID` / `GCP_REGION` vars on the app repo).
-3. Run setup/bootstrap with `PROJECT_ID` unset so scripts read tfvars, or `export PROJECT_ID=...` to override.
+1. Edit committed tfvars `project_id` in `environments/bootstrap/{dev,prod}.tfvars` and `environments/{dev,prod}/terraform.tfvars`. Placeholder shapes live in the matching `*.tfvars.example` files.
+2. Set GitHub **Environment** variables `GCP_PROJECT_ID`, `GCP_REGION`, and `TF_STATE_BUCKET` for that env; delete repo-level copies once both Environments are set.
+3. Run setup/bootstrap with `PROJECT_ID` unset so scripts read tfvars, or `export PROJECT_ID=...` to override; then **lock** terraform-sa.
 4. Apply the env stack (`infra-pipeline`), then deploy the app from the app repo.
 
 Operator convenience outputs after env apply: `app_sa_email`, `cloud_sql_connection_name` (CI uses deterministic names; outputs are for docs / local Helm).
@@ -164,8 +230,9 @@ Infra apply runs only through **`infra-pipeline.yml`** on runners labeled `self-
 ### Main Infrastructure Pipeline (`infra-pipeline.yml`)
 
 *   **Trigger:** Pushes to `main` (plans **dev**), or manual `workflow_dispatch` for `dev` / `prod` with `plan` / `apply` / `destroy`.
-*   **Protection:** Production deployments are limited to the `main` branch. Apply uses the GitHub Environment gate and a plan artifact (no apply without a prior plan).
+*   **Protection:** Production deployments are limited to the `main` branch. Validate, plan, apply, and destroy use the GitHub Environment so `vars.GCP_*` / `TF_STATE_BUCKET` are env-scoped. Apply still requires a prior plan artifact.
 *   **Runner:** `[self-hosted, infra, dev|prod]` — must match the GCE infra runner registration labels.
+*   **Guards:** CI fails if `google_project_iam_` appears under `environments/{dev,prod}` or `modules/{gke,identity,cloud-sql}`.
 
 Application build/release/deploy workflows live in the **[capstone-project-app](https://github.com/njakov/capstone-project-app)** repository (not this repo). After ARC cutover they target scale set names such as `petclinic-arc-dev` / `petclinic-arc-prod`.
 
@@ -211,7 +278,9 @@ The modules/middleware module installs essential shared services into the cluste
 Important Notes
 ------------------
 
-*   **State Management:** The Terraform state is stored remotely in a GCS bucket.
+*   **State Management:** The Terraform state is stored remotely in a GCS bucket (`terraform-state-bucket-${project_id}` — one per project).
+    
+*   **Tear down:** Destroy **env first**, then bootstrap. Destroy GKE the same day prod screenshots finish.
     
 *   **Ingress access:** `allowed_source_ranges` in each environment's `terraform.tfvars` limits who can reach the Ingress LoadBalancer. Update it if your public IP changes.
     
@@ -220,5 +289,7 @@ Important Notes
 *   **SSH Access:** SSH to the infra runner is IAP-only, scoped to the `infra-runner` network tag.
     
 *   **Runner labels:** Register infra runners as `self-hosted,infra,{env}` or the infra pipeline will not pick them up.
+
+*   **Terraform identity:** Local bootstrap impersonates `terraform-sa` then **locks/disables** it; `infra-pipeline` applies as `github-infra-runner-sa-{env}` on the VM. Do not bake `--impersonate` into ADC — use plain `gcloud auth application-default login`.
     
-*   **Cost:** This infrastructure creates real resources (GKE Cluster, Load Balancers, Cloud SQL). Remember to run the **Destroy** workflow.
+*   **Cost:** Real resources (GKE, LBs, Cloud SQL). Prefer short-lived prod; run the **Destroy** workflow for env, then destroy bootstrap.

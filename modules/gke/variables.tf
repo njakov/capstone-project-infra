@@ -5,19 +5,24 @@ variable "project_id" {
   description = "The GCP project ID."
 }
 
-variable "region" {
+variable "cluster_location" {
   type        = string
-  description = "The region for the GKE cluster (e.g., 'europe-west1')."
+  description = "GKE control-plane location: a region (regional HA) or a zone (zonal). Must match both node pools."
 }
 
 variable "node_locations" {
   type        = list(string)
-  description = "Zones in the cluster region where worker nodes may run."
+  description = "Zones where worker nodes may run. For a zonal cluster, typically a single zone matching cluster_location."
 }
 
 variable "cluster_name" {
   type        = string
   description = "The name for the GKE cluster."
+}
+
+variable "node_service_account_email" {
+  type        = string
+  description = "Email of the pre-created GKE node service account (from bootstrap-iam)."
 }
 
 variable "network_name" {
@@ -48,13 +53,13 @@ variable "master_ipv4_cidr_block" {
 
 variable "min_node_count" {
   type        = number
-  description = "Minimum number of nodes in the pool."
+  description = "Minimum nodes per zone in the primary pool (google_container_node_pool autoscaling is per zone)."
   default     = 1
 }
 
 variable "max_node_count" {
   type        = number
-  description = "Maximum number of nodes in the pool for autoscaling."
+  description = "Maximum nodes per zone in the primary pool for autoscaling (per zone, not cluster-wide)."
   default     = 3
 }
 
@@ -182,13 +187,13 @@ variable "runner_machine_type" {
 
 variable "runner_min_node_count" {
   type        = number
-  description = "Minimum nodes in the runner pool (0 allows scale-to-zero)."
+  description = "Minimum nodes per zone in the runner pool (0 allows scale-to-zero; per zone)."
   default     = 0
 }
 
 variable "runner_max_node_count" {
   type        = number
-  description = "Maximum nodes in the runner pool."
+  description = "Maximum nodes per zone in the runner pool."
   default     = 2
 }
 

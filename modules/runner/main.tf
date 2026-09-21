@@ -1,4 +1,5 @@
-# Service Account for the infra Terraform runner (powerful by design — see ADR)
+# Day-2 infra runner SA: workload *admin roles + networkAdmin; no project IAM/SA admin.
+# Resource-level SA grants for node/app/app-runner live in modules/bootstrap-iam (D6).
 resource "google_service_account" "runner_sa" {
   project      = var.project_id
   account_id   = "github-infra-runner-sa-${var.env}"
@@ -6,27 +7,23 @@ resource "google_service_account" "runner_sa" {
 }
 
 locals {
+  # Keep networkAdmin (app VPC, peering, SQL PSA). Drop projectIamAdmin and
+  # project-level serviceAccountAdmin/User — those were day-1 chicken-egg only.
   required_roles = [
     "roles/compute.networkAdmin",
-    "roles/container.admin",                   # To manage GKE
-    "roles/cloudsql.admin",                    # To manage Cloud SQL
-    "roles/secretmanager.admin",               # To manage Secrets
-    "roles/iam.serviceAccountUser",            # To attach SAs to GKE nodes/VMs
-    "roles/resourcemanager.projectIamAdmin",   # To grant IAM bindings (documented accepted risk)
-    "roles/serviceusage.serviceUsageConsumer", # To enable APIs
-    "roles/iam.serviceAccountAdmin",
-    "roles/artifactregistry.admin"
+    "roles/container.admin",
+    "roles/cloudsql.admin",
+    "roles/secretmanager.admin",
+    "roles/artifactregistry.admin",
+    "roles/serviceusage.serviceUsageConsumer",
   ]
 }
 
-# tfsec:ignore:google-iam-no-project-level-service-account-impersonation
 resource "google_project_iam_member" "runner_permissions" {
   for_each = toset(local.required_roles)
   project  = var.project_id
-  # tfsec:ignore:google-iam-no-project-level-service-account-impersonation
-  # Terraform Runner needs to attach Service Accounts to the resources it creates.
-  role   = each.value
-  member = "serviceAccount:${google_service_account.runner_sa.email}"
+  role     = each.value
+  member   = "serviceAccount:${google_service_account.runner_sa.email}"
 }
 
 resource "google_storage_bucket_iam_member" "runner_state_access" {
@@ -39,7 +36,7 @@ resource "google_storage_bucket_iam_member" "runner_state_access" {
 resource "google_compute_instance" "runner" {
   project      = var.project_id
   name         = "runner-vm-infra-${var.env}"
-  machine_type = "e2-standard-2"
+  machine_type = var.machine_type
   zone         = var.zone
 
   metadata = {

@@ -21,13 +21,15 @@ variable "env" {
 }
 
 variable "gke_min_nodes" {
-  type    = number
-  default = 1
+  type        = number
+  description = "Minimum GKE nodes per zone in the primary pool."
+  default     = 1
 }
 
 variable "gke_max_nodes" {
-  type    = number
-  default = 3
+  type        = number
+  description = "Maximum GKE nodes per zone in the primary pool."
+  default     = 3
 }
 
 variable "gke_machine_type" {
@@ -35,13 +37,23 @@ variable "gke_machine_type" {
   default = "e2-standard-2"
 }
 
+variable "gke_cluster_location" {
+  type        = string
+  description = "GKE control-plane location: zone (zonal) or region (regional HA)."
+}
+
 variable "gke_node_locations" {
   type        = list(string)
-  description = "Zones in the region where GKE worker nodes may run."
+  description = "Zones where GKE worker nodes may run (per-zone min/max apply)."
 }
 
 variable "db_tier" {
   description = "Database instance machine type"
+  type        = string
+}
+
+variable "db_availability_type" {
+  description = "Cloud SQL availability: ZONAL or REGIONAL"
   type        = string
 }
 
@@ -53,6 +65,21 @@ variable "gke_maintenance_start_time" {
 
 variable "master_ipv4_cidr_block" {
   description = "GKE control-plane /28 CIDR. Must be unique per cluster in this project (dev vs prod)."
+  type        = string
+}
+
+variable "subnet_cidr" {
+  description = "App VPC private subnet CIDR"
+  type        = string
+}
+
+variable "pods_cidr" {
+  description = "App VPC secondary range for GKE pods"
+  type        = string
+}
+
+variable "services_cidr" {
+  description = "App VPC secondary range for GKE services"
   type        = string
 }
 

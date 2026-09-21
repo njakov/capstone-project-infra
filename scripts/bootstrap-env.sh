@@ -12,6 +12,16 @@
 #   REGION          — else region from tfvars, else europe-west1
 #   YOUR_USER_EMAIL — else gcloud config get-value account
 #   BUCKET_NAME     — always terraform-state-bucket-${PROJECT_ID}
+#
+# This script does NOT grant or revoke IAM. Run ./scripts/setup_gcp.sh <env>
+# first (create-bucket + setup-terraform-sa). Here we only:
+#   1. Verify terraform-sa exists and is enabled (fail closed if disabled)
+#   2. Impersonate terraform-sa
+#   3. terraform init + apply for environments/bootstrap
+#
+# Terraform auth: require_terraform_sa_impersonation exports
+# GOOGLE_IMPERSONATE_SERVICE_ACCOUNT=terraform-sa@... (user ADC must exist;
+# day-2 CI uses the GCE runner SA instead — see docs/adr/001-runner-isolation.md).
 # ==============================================================================
 
 set -e  # Exit on error
@@ -56,57 +66,18 @@ echo "YOUR_USER_EMAIL=${YOUR_USER_EMAIL}"
 gcloud config set project "$PROJECT_ID"
 
 # ==============================================================================
-# STEP 3: INFRASTRUCTURE PRE-REQUISITES (Idempotent)
+# STEP 3: PRE-FLIGHT (no IAM writes — setup_gcp.sh / setup-terraform-sa.sh only)
 # ==============================================================================
-# Only runs once; skips if resources already exist.
 
-# A. Service Account
-echo -e "\n${BLUE}[1/3] Verifying Service Account...${NC}"
-if ! gcloud iam service-accounts describe "${SA_EMAIL}" --project="${PROJECT_ID}" &>/dev/null; then
-  echo "Creating Service Account: $SA_NAME..."
-  gcloud iam service-accounts create "${SA_NAME}" --display-name="Terraform Service Account" --project="${PROJECT_ID}"
-else
-  echo "Service Account '$SA_NAME' exists."
-fi
-
-# A.1 Grant Permissions (Safe to re-run)
-echo "Ensuring IAM roles..."
-ROLES=(
-  "roles/container.admin"
-  "roles/compute.networkAdmin"
-  "roles/compute.instanceAdmin.v1"
-  "roles/compute.securityAdmin"
-  "roles/cloudsql.admin"
-  "roles/secretmanager.admin"
-  "roles/serviceusage.serviceUsageConsumer"
-  "roles/iam.serviceAccountAdmin"
-  "roles/iam.serviceAccountCreator"
-  "roles/resourcemanager.projectIamAdmin"
-)
-for role in "${ROLES[@]}"; do
-  gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${SA_EMAIL}" --role="${role}" --condition=None --quiet >/dev/null
-done
-gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" --member="serviceAccount:${SA_EMAIL}" --role="roles/storage.objectAdmin" --quiet >/dev/null
-gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" --member="user:${YOUR_USER_EMAIL}" --role="roles/iam.serviceAccountTokenCreator" --project="${PROJECT_ID}" --quiet >/dev/null
-
-# B. State Bucket
-echo -e "\n${BLUE}[2/3] Verifying State Bucket...${NC}"
-gcloud services enable cloudkms.googleapis.com storage.googleapis.com --project="${PROJECT_ID}" >/dev/null
-
-if ! gcloud storage buckets describe "gs://$BUCKET_NAME" --project="$PROJECT_ID" &>/dev/null; then
-  echo "Creating Bucket: $BUCKET_NAME..."
-  # (Simplified creation for brevity - ensures bucket exists)
-  gcloud storage buckets create "gs://$BUCKET_NAME" --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access
-  gcloud storage buckets update "gs://$BUCKET_NAME" --versioning
-  echo "Bucket created."
-else
-  echo "Bucket 'gs://$BUCKET_NAME' exists."
-fi
+echo -e "\n${BLUE}[1/2] Verifying terraform-sa is present and enabled...${NC}"
+require_terraform_sa_enabled
 
 # ==============================================================================
-# STEP 4: TERRAFORM APPLY
+# STEP 4: TERRAFORM APPLY (as terraform-sa via impersonation — not as the human user)
 # ==============================================================================
-echo -e "\n${BLUE}[3/3] Deploying Bootstrap Layer for ${ENV}...${NC}"
+echo -e "\n${BLUE}[2/2] Deploying Bootstrap Layer for ${ENV}...${NC}"
+
+require_terraform_sa_impersonation
 
 cd "$BOOTSTRAP_DIR"
 
@@ -123,9 +94,11 @@ terraform apply -var-file="${ENV}.tfvars" -auto-approve
 echo -e "\n${GREEN}=== ${ENV} BOOTSTRAP COMPLETE ===${NC}"
 echo ""
 echo "Next steps:"
-echo "  1. IAP SSH to the infra runner (see terraform output runner_ssh_command)."
-echo "  2. Switch to the runner user: sudo -iu runner"
-echo "  3. Register the GitHub Actions runner with labels: self-hosted,infra,${ENV}"
-echo "  4. Apply environments/${ENV} via infra-pipeline.yml (runs-on: self-hosted,infra,${ENV})"
+echo "  1. Lock terraform-sa (disable after bootstrap — CEL does not constrain serviceAccountAdmin):"
+echo "       ./scripts/lock-terraform-sa.sh ${ENV}"
+echo "  2. IAP SSH to the infra runner (see terraform output runner_ssh_command)."
+echo "  3. Switch to the runner user: sudo -iu runner"
+echo "  4. Register the GitHub Actions runner with labels: self-hosted,infra,${ENV}"
+echo "  5. Apply environments/${ENV} via infra-pipeline.yml (runs-on: self-hosted,infra,${ENV})"
 echo ""
 echo "Docs: docs/adr/001-runner-isolation.md"
