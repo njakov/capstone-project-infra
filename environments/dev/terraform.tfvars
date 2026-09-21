@@ -24,4 +24,4 @@ services_cidr = "10.30.0.0/16"
 
 # ARC: create SM shells on apply; flip arc_install_charts after adding GitHub App versions
 enable_arc         = true
-arc_install_charts = false
+arc_install_charts = true
