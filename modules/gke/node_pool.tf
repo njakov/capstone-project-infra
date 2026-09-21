@@ -3,7 +3,7 @@
 resource "google_container_node_pool" "primary_nodes" {
   project            = var.project_id
   name               = var.node_pool_name
-  location           = var.region
+  location           = var.cluster_location
   node_locations     = var.node_locations
   cluster            = google_container_cluster.primary.id
   initial_node_count = var.min_node_count
@@ -30,7 +30,7 @@ resource "google_container_node_pool" "primary_nodes" {
     tags         = var.node_tags
     image_type   = var.image_type
 
-    service_account = google_service_account.gke_node_sa.email
+    service_account = var.node_service_account_email
 
     oauth_scopes = [
       "https://www.googleapis.com/auth/cloud-platform"
@@ -65,7 +65,7 @@ resource "google_container_node_pool" "runners" {
 
   project            = var.project_id
   name               = var.runner_node_pool_name
-  location           = var.region
+  location           = var.cluster_location
   node_locations     = var.node_locations
   cluster            = google_container_cluster.primary.id
   initial_node_count = max(var.runner_min_node_count, 0)
@@ -92,7 +92,7 @@ resource "google_container_node_pool" "runners" {
     tags         = var.node_tags
     image_type   = var.runner_image_type
 
-    service_account = google_service_account.gke_node_sa.email
+    service_account = var.node_service_account_email
 
     oauth_scopes = [
       "https://www.googleapis.com/auth/cloud-platform"

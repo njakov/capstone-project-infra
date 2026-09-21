@@ -1,18 +1,6 @@
 # modules/cloud-sql/main.tf
-
-# --- 1. Enable the Service Networking API ---
-resource "google_project_service" "service_networking" {
-  project                    = var.project_id
-  service                    = "servicenetworking.googleapis.com"
-  disable_dependent_services = false
-}
-
-
-resource "google_project_service" "secret_manager" {
-  project                    = var.project_id
-  service                    = "secretmanager.googleapis.com"
-  disable_dependent_services = false
-}
+# APIs (servicenetworking, secretmanager) are enabled by scripts/setup_gcp.sh as Owner.
+# Do not use google_project_service here — serviceUsageConsumer cannot enable APIs.
 
 # Create a Private IP Range for the Peering
 resource "google_compute_global_address" "private_ip_range" {
@@ -30,8 +18,6 @@ resource "google_service_networking_connection" "private_vpc_connection" {
   network                 = "projects/${var.project_id}/global/networks/${var.network_name}"
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.private_ip_range.name]
-
-  depends_on = [google_project_service.service_networking]
 }
 
 # Preserve the existing application password when renaming the resource.
@@ -67,7 +53,7 @@ resource "google_sql_database_instance" "main" {
 
   settings {
     tier              = var.db_tier
-    availability_type = "REGIONAL"
+    availability_type = var.availability_type
     #tfsec:ignore:google-sql-encrypt-in-transit-data
     ip_configuration {
       ipv4_enabled    = false
@@ -110,7 +96,6 @@ resource "google_secret_manager_secret" "db_username" {
   replication {
     auto {}
   }
-  depends_on = [google_project_service.secret_manager]
 }
 
 resource "google_secret_manager_secret_version" "db_username_val" {
@@ -125,7 +110,6 @@ resource "google_secret_manager_secret" "db_password" {
   replication {
     auto {}
   }
-  depends_on = [google_project_service.secret_manager]
 }
 
 resource "google_secret_manager_secret_version" "db_password_val" {
@@ -142,7 +126,6 @@ resource "google_secret_manager_secret" "db_root_password" {
   replication {
     auto {}
   }
-  depends_on = [google_project_service.secret_manager]
 }
 
 resource "google_secret_manager_secret_version" "db_root_password_val" {
@@ -157,7 +140,6 @@ resource "google_secret_manager_secret" "db_url" {
   replication {
     auto {}
   }
-  depends_on = [google_project_service.secret_manager]
 }
 
 resource "google_secret_manager_secret_version" "db_url_val" {
@@ -183,14 +165,4 @@ resource "google_secret_manager_secret_iam_member" "url_access" {
   member    = "serviceAccount:${var.app_service_account_email}"
 }
 
-resource "google_project_iam_member" "sql_client_role" {
-  project = var.project_id
-  role    = "roles/cloudsql.client"
-  member  = "serviceAccount:${var.app_service_account_email}"
-
-  condition {
-    title       = "restrict-to-${google_sql_database_instance.main.name}"
-    description = "Allows connection only to the ${google_sql_database_instance.main.name} instance"
-    expression  = "resource.name == 'projects/${var.project_id}/instances/${google_sql_database_instance.main.name}' && resource.service == 'sqladmin.googleapis.com'"
-  }
-}
+# cloudsql.client (conditioned) is granted in bootstrap-iam; do not re-bind here.

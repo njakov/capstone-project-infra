@@ -6,7 +6,7 @@ output "cluster_name" {
 }
 
 output "cluster_location" {
-  description = "The location (region) of the GKE cluster."
+  description = "The location (region or zone) of the GKE cluster."
   value       = google_container_cluster.primary.location
 }
 
@@ -29,5 +29,5 @@ output "cluster_ca_certificate" {
 
 output "node_service_account_email" {
   description = "The email of the Service Account used by the GKE nodes."
-  value       = google_service_account.gke_node_sa.email
+  value       = var.node_service_account_email
 }

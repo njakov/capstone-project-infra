@@ -1,14 +1,33 @@
 # ------------------------------------------------------------------------------
-# 1. DISCOVERY: App VPC (bootstrap) + infra subnet for private GKE API access
+# 0. PRE-CREATED WORKLOAD SAs (bootstrap-iam; deterministic account_ids)
 # ------------------------------------------------------------------------------
-data "google_compute_network" "vpc" {
-  name    = "${var.app_name}-vpc-${var.env}"
-  project = var.project_id
+locals {
+  node_sa_email       = "${var.app_name}-gke-${var.env}-node-sa@${var.project_id}.iam.gserviceaccount.com"
+  app_sa_email        = "${var.app_name}-sa-${var.env}@${var.project_id}.iam.gserviceaccount.com"
+  app_runner_sa_email = "github-app-runner-sa-${var.env}@${var.project_id}.iam.gserviceaccount.com"
 }
 
-data "google_compute_subnetwork" "private_subnet" {
-  name    = "${var.app_name}-vpc-${var.env}-private"
-  region  = var.region
+# ------------------------------------------------------------------------------
+# 1. APP NETWORK: VPC + NAT (env-owned; CIDRs from tfvars)
+# ------------------------------------------------------------------------------
+module "app_network" {
+  source = "../../modules/network"
+
+  project_id    = var.project_id
+  region        = var.region
+  network_name  = "${var.app_name}-vpc-${var.env}"
+  subnet_cidr   = var.subnet_cidr
+  pods_cidr     = var.pods_cidr
+  services_cidr = var.services_cidr
+  # No IAP SSH on the app VPC (infra runners live on the infra VPC)
+  iap_ssh_target_tags = []
+}
+
+# ------------------------------------------------------------------------------
+# 2. INFRA DISCOVERY: bootstrap-created infra VPC (deterministic names)
+# ------------------------------------------------------------------------------
+data "google_compute_network" "infra_vpc" {
+  name    = "${var.app_name}-infra-vpc-${var.env}"
   project = var.project_id
 }
 
@@ -19,26 +38,35 @@ data "google_compute_subnetwork" "infra_subnet" {
 }
 
 # ------------------------------------------------------------------------------
-# 2. IDENTITY: Application SA + least-privilege ARC app-runner SA
+# 3. PEERING: both legs + custom routes (infra runners → private GKE API)
+# ------------------------------------------------------------------------------
+module "peering" {
+  source = "../../modules/network-peering"
+
+  network_a_self_link = data.google_compute_network.infra_vpc.self_link
+  network_b_self_link = module.app_network.network_self_link
+  peering_name_a_to_b = "${var.app_name}-infra-to-app-${var.env}"
+  peering_name_b_to_a = "${var.app_name}-app-to-infra-${var.env}"
+}
+
+# ------------------------------------------------------------------------------
+# 4. IDENTITY: Workload Identity bindings only (SAs from bootstrap-iam)
 # ------------------------------------------------------------------------------
 module "identity" {
   source     = "../../modules/identity"
   depends_on = [module.gke]
 
-  project_id    = var.project_id
-  env           = var.env
-  app_name      = var.app_name
-  k8s_namespace = "petclinic"
-  k8s_sa_name   = var.app_name
-
-  # ARC K8s SA binding (namespace/SA created when ARC module is installed)
-  create_app_runner_sa   = true
+  project_id             = var.project_id
+  app_sa_email           = local.app_sa_email
+  k8s_namespace          = "petclinic"
+  k8s_sa_name            = var.app_name
+  app_runner_sa_email    = local.app_runner_sa_email
   arc_runners_namespace  = "arc-runners"
   arc_runner_k8s_sa_name = "arc-runner"
 }
 
 # ------------------------------------------------------------------------------
-# 3. DATABASE: Cloud SQL
+# 5. DATABASE: Cloud SQL (secret accessor IAM only; cloudsql.client in bootstrap)
 # ------------------------------------------------------------------------------
 module "cloud_sql" {
   source = "../../modules/cloud-sql"
@@ -47,33 +75,36 @@ module "cloud_sql" {
   region      = var.region
   environment = var.env
 
-  app_name         = var.app_name
-  db_instance_name = "${var.app_name}-db-${var.env}"
-  db_name          = var.app_name
-  db_user          = var.app_name
-  db_tier          = var.db_tier
+  app_name          = var.app_name
+  db_instance_name  = "${var.app_name}-db-${var.env}"
+  db_name           = var.app_name
+  db_user           = var.app_name
+  db_tier           = var.db_tier
+  availability_type = var.db_availability_type
 
-  network_name              = data.google_compute_network.vpc.name
-  app_service_account_email = module.identity.email
+  network_name              = module.app_network.network_name
+  app_service_account_email = local.app_sa_email
 }
 
 # ------------------------------------------------------------------------------
-# 4. KUBERNETES: GKE Cluster
+# 6. KUBERNETES: GKE Cluster (after peering so private endpoint is reachable)
 # ------------------------------------------------------------------------------
 module "gke" {
-  source = "../../modules/gke"
+  source     = "../../modules/gke"
+  depends_on = [module.peering]
 
-  project_id   = var.project_id
-  region       = var.region
-  cluster_name = "${var.app_name}-gke-${var.env}"
+  project_id                 = var.project_id
+  cluster_location           = var.gke_cluster_location
+  cluster_name               = "${var.app_name}-gke-${var.env}"
+  node_service_account_email = local.node_sa_email
 
-  network_name = data.google_compute_network.vpc.name
-  subnet_id    = data.google_compute_subnetwork.private_subnet.id
+  network_name = module.app_network.network_name
+  subnet_id    = module.app_network.subnet_id
 
   subnet_pods_range     = "pods"
   subnet_services_range = "services"
 
-  subnet_ip_cidr_range = data.google_compute_subnetwork.private_subnet.ip_cidr_range
+  subnet_ip_cidr_range = module.app_network.subnet_ip_cidr_range
 
   additional_master_authorized_networks = [
     {
@@ -104,7 +135,7 @@ module "gke" {
 }
 
 # ------------------------------------------------------------------------------
-# 5. ARTIFACTS: Docker Registry
+# 7. ARTIFACTS: Docker Registry
 # ------------------------------------------------------------------------------
 module "artifact_registry" {
   source = "../../modules/artifact-registry"
@@ -115,7 +146,7 @@ module "artifact_registry" {
 }
 
 # ------------------------------------------------------------------------------
-# 6. MIDDLEWARE: Helm Charts
+# 8. MIDDLEWARE: Helm Charts
 # ------------------------------------------------------------------------------
 module "middleware" {
   source     = "../../modules/middleware"
@@ -126,7 +157,7 @@ module "middleware" {
 }
 
 # ------------------------------------------------------------------------------
-# 7. ARC: ephemeral app runners (same cluster; least-privilege WI SA)
+# 9. ARC: ephemeral app runners (same cluster; least-privilege WI SA)
 #     Set arc_install_charts = false until GitHub App secret versions exist.
 # ------------------------------------------------------------------------------
 module "arc" {

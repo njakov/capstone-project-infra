@@ -44,7 +44,18 @@ variable "db_tier" {
   type        = string
   description = "The machine type for the instance."
   default     = "db-f1-micro"
-  # NOTE: For HA (regional), you must use 'db-g1-small' or larger.
+  # NOTE: For HA (REGIONAL), you must use 'db-g1-small' or larger.
+}
+
+variable "availability_type" {
+  type        = string
+  description = "Cloud SQL availability: ZONAL (single zone) or REGIONAL (HA)."
+  default     = "ZONAL"
+
+  validation {
+    condition     = contains(["ZONAL", "REGIONAL"], var.availability_type)
+    error_message = "availability_type must be ZONAL or REGIONAL."
+  }
 }
 
 variable "app_service_account_email" {

@@ -3,14 +3,9 @@ variable "project_id" {
   description = "GCP project ID"
 }
 
-variable "env" {
+variable "app_sa_email" {
   type        = string
-  description = "Environment name (dev, prod)"
-}
-
-variable "app_name" {
-  type        = string
-  description = "Application name used in resource naming"
+  description = "Email of the pre-created application GCP service account (from bootstrap-iam)."
 }
 
 variable "k8s_namespace" {
@@ -24,10 +19,10 @@ variable "k8s_sa_name" {
   description = "Kubernetes ServiceAccount name for the app"
 }
 
-variable "create_app_runner_sa" {
-  type        = bool
-  description = "Create the least-privilege GCP SA used by ARC ephemeral app runners"
-  default     = false
+variable "app_runner_sa_email" {
+  type        = string
+  description = "Email of the pre-created ARC app-runner GCP SA. Empty string skips the WI binding."
+  default     = ""
 }
 
 variable "arc_runners_namespace" {

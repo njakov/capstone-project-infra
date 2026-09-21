@@ -1,27 +1,36 @@
 # ADR 001: Runner isolation (infra GCE + in-cluster ARC)
 
 **Status:** Accepted  
-**Date:** 2026-09-20  
+**Date:** 2026-09-21  
 **Repo:** `capstone-project-infra`
 
 ## Context
 
 Previously a single GCE VM lived in the **app VPC** and ran both Terraform (infra apply) and application CI/CD (Docker build, Helm deploy). That colocates a powerful Terraform identity with app build/deploy, widens blast radius, and makes it hard to teach least-privilege runner design.
 
-This capstone must showcase private networking and runner isolation without the cost of a second GKE cluster or separate GCP projects.
+This capstone must showcase private networking and runner isolation on a **trial Gmail billing account** (no org, no folders, no deny policies). The hard constraints:
+
+1. **Isolation is a project boundary.** Dev and prod are separate GCP projects. In-project IAM Conditions on `container.admin` are not a substitute for a second project.
+2. **Bootstrap is chicken-egg only.** Local `terraform-sa` creates the infra VPC, runner SA/VM, and workload SAs + project IAM. It must not create the app VPC, GKE, or SQL. After bootstrap, `terraform-sa` is **disabled**.
+3. **Day-2 must not be project IAM admin.** The GCE infra runner applies env Terraform (app VPC, peering, GKE, SQL, WI). It keeps workload `*admin` roles and `networkAdmin` inside its project, but loses `projectIamAdmin` and project-level SA admin/user so it cannot rewrite project IAM or hijack `terraform-sa`.
+
+App CI still runs as **ARC ephemeral runners** in the same env GKE cluster (privilege reduction within the cluster, not a second GKE). Compromised ARC cannot touch Terraform state or the other project's runners.
 
 ## Decision
 
 | Concern | Choice |
 |---------|--------|
-| Infra plane | **Per-env infra VPC + GCE runner** (`runner-vm-infra-{env}`), registered with labels `self-hosted`, `infra`, `{env}` |
+| Env isolation | **One GCP project per env.** Dev keeps existing ID `project-62ebde90-46b7-4e70-b59` (immutable; display name `PetClinic Dev`). Prod is a **new** project (display name `PetClinic Prod`; ID `petclinic-gke-prod`). Never reuse the dev UUID. |
+| Infra plane | **Per-env infra VPC + GCE runner** (`runner-vm-infra-{env}`), labels `self-hosted`, `infra`, `{env}`, machine type **`e2-medium`** |
 | App CI plane | **ARC ephemeral runner scale sets** in the **same** env GKE cluster (`modules/arc`, scale set `petclinic-arc-{env}`) |
 | Cluster topology | Same GKE as the app — **privilege reduction**, not a second security domain |
+| Bootstrap scope | **Infra VPC + NAT + IAP SSH + runner SA/VM + `bootstrap-iam` only.** No app VPC. No peering. |
+| App network | **Env apply** creates app VPC + both peering legs (infra via data source), then GKE. Runner `networkAdmin` is the accepted cost of bare-min bootstrap. |
 | In-cluster isolation | Dedicated namespaces (`arc-systems` / `arc-runners`), tainted `runners` node pool, demo-quality NetworkPolicies, Workload Identity |
 | Build strategy on ARC | **Kaniko** (non-privileged); no DinD in MVP |
-| Infra CI path | Single apply path: [`infra-pipeline.yml`](../../.github/workflows/infra-pipeline.yml) on infra-labeled runners |
+| Infra CI path | Single apply path: [`infra-pipeline.yml`](../../.github/workflows/infra-pipeline.yml) on infra-labeled runners; GitHub **Environment** vars (`GCP_PROJECT_ID`, `GCP_REGION`, `TF_STATE_BUCKET`) on validate, plan, and apply |
 
-### CIDR plan (same GCP project — must not collide)
+### CIDR plan (non-overlapping; distinct even across projects)
 
 | Network | Dev | Prod |
 |---------|-----|------|
@@ -30,50 +39,114 @@ This capstone must showcase private networking and runner isolation without the 
 | GKE master | `172.16.0.0/28` | `172.16.0.16/28` |
 | Infra subnet | `10.50.0.0/24` | `10.51.0.0/24` |
 
-Infra ↔ app VPC peering exports/imports **custom routes** so GCE infra runners can reach the private GKE control plane. GKE `master_authorized_networks_config` includes both the app subnet and the infra subnet CIDRs.
+Infra ↔ app VPC peering (env-owned) exports/imports **custom routes** so GCE infra runners can reach the private GKE control plane. GKE `master_authorized_networks_config` includes both the app subnet and the infra subnet CIDRs. Peering must be ACTIVE before private GKE Helm (env `depends_on` + README verify).
+
+### Env sizing (dev cheaper / zonal; prod shows real HA)
+
+| Layer | Dev | Prod |
+|-------|-----|------|
+| GKE control plane | **Zonal** (`europe-west1-c`). Not HA — accepted. Cluster fee covered by GKE free tier. | **Regional** (`europe-west1`). GKE HA screenshot. |
+| App node pool | **1 zone** (`europe-west1-c`), min 1 / max 2 **per zone**, `e2-standard-2` | **2 zones** (`europe-west1-c`, `europe-west1-d`), min 1 / max 2 **per zone**, `e2-standard-2`. Not 3 zones. |
+| ARC runner pool | Keep, min 0, `e2-standard-4` | Pool min 0; `arc_install_charts = false` unless a screenshot needs ARC |
+| Cloud SQL | `db-f1-micro`, **`ZONAL`** | **`db-g1-small`, `REGIONAL`** from the start (no f1-micro HA pivot) |
+| GCE infra runner | **`e2-medium`** (Terraform only; no Docker builds) | Same |
+| Prometheus | 7d / 10Gi. If MemoryPressure on the single node, bump **machine type** (one `e2-standard-4`), not zone count. | Same defaults OK on two nodes |
+| App replicas / HPA | 1–2 replicas, no HPA | 2 replicas if shown; no HPA |
+
+### Trial runtime
+
+- Dev live **up to ~1 week**. Prod is a **2–3 day screenshot window**, then destroy **env first** (regional GKE fee ticks from cluster create until delete), then bootstrap.
+- First prod env apply budgets **45–90 minutes** (regional GKE + SQL HA + VPC + peering + Helm).
+- Do not leave both stacks always-on. Estimated burn ~$60 combined vs $300 credit (list-price, europe-west1); confirm Billing balance before the prod window.
 
 ### IAM split
 
 | Identity | Purpose | Notable roles |
 |----------|---------|---------------|
-| `github-infra-runner-sa-{env}` (GCE) | Terraform apply | Includes `projectIamAdmin` (**powerful-by-design** for module simplicity) + state bucket admin, network, GKE, Secret Manager admin |
+| `terraform-sa` (local only) | Chicken-egg **bootstrap** from a laptop (optional break-glass). **Not** used by `infra-pipeline`. Locked after bootstrap by **disabling the SA**. | `networkAdmin`, `instanceAdmin.v1`, `securityAdmin`, `serviceAccountAdmin`, **conditioned** `projectIamAdmin` (`modifiedGrantsByRole` allow-list), `serviceUsageConsumer`; bucket `storage.objectAdmin` only. **No** project-level `serviceAccountUser`, **no** `container.admin` / `cloudsql.admin` / `secretmanager.admin` / `artifactregistry.admin`, **no** bucket `storage.admin`. Operator gets `roles/iam.serviceAccountTokenCreator` only — no SA JSON keys. |
+| `github-infra-runner-sa-{env}` (GCE) | Day-2 Terraform apply (`infra-pipeline.yml`) | Project: `networkAdmin`, `container.admin`, `cloudsql.admin`, `secretmanager.admin`, `artifactregistry.admin`, `serviceUsageConsumer`; bucket `objectAdmin`. **No** `projectIamAdmin`, **no** project-level `serviceAccountAdmin` / `serviceAccountUser`. Resource-level (bootstrap D6): SA admin on app + app-runner SAs; `serviceAccountUser` on node SA. |
 | `github-app-runner-sa-{env}` (WI → ARC) | App build/deploy only | `artifactregistry.writer`, `container.developer` — **no** `projectIamAdmin`, **no** state admin, **no** `networkAdmin`, **no** `secretmanager.admin` |
+
+**Binder allow-list** (CEL on terraform-sa `projectIamAdmin`): workload grant roles only (`networkAdmin`, `container.admin`, `cloudsql.admin`, `secretmanager.admin`, `artifactregistry.admin`, `serviceUsageConsumer`, log/metric writers, AR reader/writer, `container.developer`, `cloudsql.client`). Off-list roles (incl. `owner`, `projectIamAdmin`, SA admin/user) → fix Terraform, **do not widen CEL**. Cleanup of off-list roles is Owner-only.
+
+**Auth model:** keyless. Local bootstrap = user ADC + impersonate `terraform-sa` (`GOOGLE_IMPERSONATE_SERVICE_ACCOUNT` + `environments/bootstrap/provider.tf`). `setup-terraform-sa.sh` is the **only** IAM writer; `bootstrap-env.sh` impersonates + apply only (fail closed if terraform-sa is disabled). Day-2 CI = GCE metadata credentials for `github-infra-runner-sa-{env}` (not `terraform-sa`, not GitHub→GCP OIDC).
+
+**Negative IAM tests** (teaching demo; `scripts/negative-iam-tests.sh`): terraform-sa cannot bind `roles/owner` or create GKE/SQL; runner cannot `setIamPolicy` on `terraform-sa`. Expect `PERMISSION_DENIED`.
+
+**Who creates what:**
+
+| Stage | Creates |
+|-------|---------|
+| `setup_gcp` (human Owner) | State bucket; terraform-sa + conditioned IAM |
+| Bootstrap (as terraform-sa) | Infra VPC/NAT/IAP; runner SA + VM; workload SAs + project IAM; D6 resource-level grants → then **disable terraform-sa** |
+| Env apply (as runner) | App VPC + peering; GKE / SQL / AR / middleware / ARC; WI + secret accessor IAM only (no `google_project_iam_*`) |
+
+### Honest residuals
+
+| Residual | Why it remains |
+|----------|----------------|
+| Runner `networkAdmin` + four `*admin` roles **inside its project** | Isolation is the **other project**, not in-project narrowing of those admins |
+| D6: runner can create keys on app / app-runner SAs | CEL does not constrain project-level `serviceAccountAdmin` on terraform-sa; D6 is a **code convention** until terraform-sa is disabled. Runner cannot `setIamPolicy` on `terraform-sa` |
+| State + `secretmanager.admin` | DB passwords available to the infra runner **by design** |
+| Human Gmail user stays Owner | Real break-glass; never put `roles/owner` on an SA |
+
+### Honest tradeoff
+
+| Gain | Cost |
+|------|------|
+| Bootstrap is chicken-egg; terraform-sa cannot touch GKE/SQL | First env apply must VPC + peer before private GKE |
+| Runner cannot rewrite project IAM or hijack terraform-sa | Runner owns app VPC (`networkAdmin`); D6 is code until terraform-sa is disabled |
+| Dev runner cannot touch prod | Second project + second bootstrap for 2–3 days |
+| Dev is cheaper / zonal; prod shows real HA | Two GKE topologies in one module (`cluster_location` on cluster + both node pools) |
 
 ## Consequences
 
-- Bootstrap creates **two** VPCs + peering + an infra-only runner; first infra runner still needs a **local** bootstrap (chicken-egg).
-- Infra workflows must use `runs-on: [self-hosted, infra, {env}]`.
+- Bootstrap creates **one** infra VPC + runner + workload IAM; first infra runner still needs a **local** bootstrap that **impersonates `terraform-sa`**. Day-2 applies use **`github-infra-runner-sa-{env}`**, not `terraform-sa`.
+- App VPC + peering move to env state. Applying slim bootstrap onto old state that still owns `module.app_network` **deletes the app VPC** — destroy env then bootstrap before migrating.
+- Infra workflows must use `runs-on: [self-hosted, infra, {env}]` and Environment-scoped GCP vars on **validate, plan, apply, and destroy** (repo-level leftovers silently fall back to dev — delete them once both Environments are set). Prod Environment required reviewers on plan/validate gates every prod plan; prefer reviewers on apply-only unless intentional.
 - App workflows use ARC scale set names (`petclinic-arc-dev` / `petclinic-arc-prod`) and build images with **Kaniko** (no DinD).
 - ARC runner pods run as UID 0 so the Kaniko executor can unpack layers under `/kaniko` (still no privileged Docker socket).
 - Compromised ARC with deploy rights can still change Deployments **in that cluster**; this is accepted for the demo.
-- Docker on the GCE infra VM uses the `docker` group (`runner` user) — never world-writable socket (`chmod 666`).
+- Docker on the GCE infra VM (if present) uses the `docker` group (`runner` user) — never world-writable socket (`chmod 666`). Day-2 infra path is Terraform-only on `e2-medium`.
 - App CI trusts GKE Workload Identity on ARC pods (not GitHub→GCP OIDC / `id-token`).
 
 ## Accepted risks (explicit)
 
-- Same GCP project for `dev` and `prod`
-- Same GKE cluster for app workloads and ARC runners
-- Powerful infra SA (`projectIamAdmin`)
+- No org / folders / deny policies on trial Gmail
+- Same GKE cluster for app workloads and ARC runners (within each project)
+- Runner retains `networkAdmin` + workload `*admin` **inside** its project
+- D6 residual (keys on app/app-runner SAs) until terraform-sa is disabled
+- Prometheus may force a bigger **single** dev node (machine type, not zone count)
+- Peering-before-Helm ordering on first env apply
 - HTTP-only Ingress (source-restricted LoadBalancer; no cert-manager in MVP)
 - Manual GCE runner registration via IAP SSH
 - No GitHub→GCP OIDC for Terraform yet (trust stays on GCE SA / ARC WI)
 - ARC runner container `runAsUser: 0` for Kaniko (privilege reduction vs DinD, not a second security domain)
+- Prod regional control-plane charge from create until delete; short screenshot window
 
 ## Non-goals
 
-- Second GKE cluster for runners; separate GCP projects
+- Second GKE cluster for runners
+- Custom `projectIamBinder` role; IAM Conditions on `container.admin` **instead of** a second project
+- Narrowing `container.admin` / `cloudsql.admin` / `secretmanager.admin` **inside** a project
+- App VPC in bootstrap; always-on dual stacks; three-zone prod
+- Project-level `serviceAccountUser` on terraform-sa; bucket `storage.admin` (keep `objectAdmin`)
+- IAM grants inside `bootstrap-env.sh`; prod SQL HA on `db-f1-micro`
 - Perfect NetworkPolicy egress allow-lists; privileged DinD
-- Full OIDC GitHub→GCP for Terraform
+- Full OIDC GitHub→GCP for Terraform; GitHub WIF / third IAM-only SA
 - Automating GCE runner binary registration
+- Renaming the existing project ID; org / folders / deny policies
+- Moving WI into bootstrap; moving Cloud SQL PSA off env
+- HPA / PDBs as required work
 - Vault / External Secrets; Binary Authorization; service mesh
 
 ## Migration sketch
 
-1. Prefer **destroy/recreate bootstrap** for `dev` if state refactor is painful.
-2. For `prod`, use Terraform `moved` blocks where possible after `dev` proves the shape (bootstrap already moves `module.network` → `module.app_network`).
+1. Prefer **destroy env then bootstrap** on the old shape (bootstrap that owns `module.app_network`) before applying slim bootstrap — greenfield network move, no `moved` across backends.
+2. Per project: `setup_gcp` → `bootstrap-env.sh` → **disable terraform-sa** → register runner → env apply.
 3. Re-register the GitHub runner with labels `self-hosted,infra,{env}` on `runner-vm-infra-{env}`.
-4. Env apply: runner node pool + ARC SM shells (`arc_install_charts = false`) → populate GitHub App secret versions → `arc_install_charts = true`.
-5. Keep any old app-capable GCE registration until ARC Gate E is green, then decommission `runner-vm-{env}`.
+4. Env apply: app VPC + peering → GKE (sizing from tfvars) → runner node pool + ARC SM shells (`arc_install_charts = false`) → populate GitHub App secret versions → `arc_install_charts = true` if needed.
+5. Prod: create project + Environment vars → bring-up for screenshots → destroy **env the same day shots finish** → destroy bootstrap.
 6. Full ops checklist: [docs/arc-cutover.md](../arc-cutover.md).
 
 ## References
@@ -91,5 +164,5 @@ Infra ↔ app VPC peering exports/imports **custom routes** so GCE infra runners
 - [AWS: Self-hosted runners at scale](https://aws.amazon.com/blogs/devops/best-practices-working-with-self-hosted-github-action-runners-at-scale-on-aws/)
 - [Isolating GitHub Actions runners](https://blog.stephane-robert.info/en/docs/pipeline-cicd/github/runners/isolation/)
 - [SEAL: Sandboxing & Isolation](https://frameworks.securityalliance.org/devsecops/isolation/sandboxing-and-isolation/)
-- [Self-hosted runner hardening](https://www.systemshardening.com/articles/cicd/github-actions-self-hosted-runner/)
+- [Self-hosted runner hardening](https://www.systemshardening.com/articles/cicd/self-hosted-runner-hardening/)
 - [ARC security: ephemeral + pod isolation](https://www.systemshardening.com/articles/cicd/actions-runner-controller-security/)

@@ -1,35 +1,12 @@
 # modules/gke/main.tf
-
-resource "google_service_account" "gke_node_sa" {
-  project      = var.project_id
-  account_id   = "${var.cluster_name}-node-sa"
-  display_name = "GKE Node SA for ${var.cluster_name}"
-}
-
-resource "google_project_iam_member" "node_sa_logging" {
-  project = var.project_id
-  role    = "roles/logging.logWriter"
-  member  = google_service_account.gke_node_sa.member
-}
-
-resource "google_project_iam_member" "node_sa_monitoring" {
-  project = var.project_id
-  role    = "roles/monitoring.metricWriter"
-  member  = google_service_account.gke_node_sa.member
-}
-
-resource "google_project_iam_member" "node_sa_artifact_registry" {
-  project = var.project_id
-  role    = "roles/artifactregistry.reader"
-  member  = google_service_account.gke_node_sa.member
-}
+# Node SA is created in bootstrap-iam; this module only attaches it to node pools.
 
 # tfsec:ignore:google-gke-enable-network-policy
 # tfsec:ignore:google-gke-enforce-pod-security-policy
 resource "google_container_cluster" "primary" {
   project             = var.project_id
   name                = var.cluster_name
-  location            = var.region
+  location            = var.cluster_location
   node_locations      = var.node_locations
   networking_mode     = "VPC_NATIVE"
   network             = var.network_name
