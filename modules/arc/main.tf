@@ -157,7 +157,7 @@ resource "helm_release" "arc_controller" {
 # githubConfigSecret (arc-github-app) is synced by External Secrets, not Terraform.
 # If a previous apply owned the secret, forget it without deleting the object.
 removed {
-  from = kubernetes_secret_v1.github_app[0]
+  from = kubernetes_secret_v1.github_app
 
   lifecycle {
     destroy = false
