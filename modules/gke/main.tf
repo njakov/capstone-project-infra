@@ -1,11 +1,20 @@
 # modules/gke/main.tf
 # Node SA is created in bootstrap-iam; this module only attaches it to node pools.
 
+locals {
+  # For a zonal cluster, location is already the node zone. The provider rejects
+  # that same zone inside node_locations. Extra zones are for multi-zonal only.
+  extra_node_locations = [
+    for zone in var.node_locations : zone
+    if zone != var.cluster_location
+  ]
+}
+
 resource "google_container_cluster" "primary" {
   project             = var.project_id
   name                = var.cluster_name
   location            = var.cluster_location
-  node_locations      = var.node_locations
+  node_locations      = length(local.extra_node_locations) > 0 ? local.extra_node_locations : null
   networking_mode     = "VPC_NATIVE"
   network             = var.network_name
   subnetwork          = var.subnet_id

@@ -12,7 +12,7 @@ variable "cluster_location" {
 
 variable "node_locations" {
   type        = list(string)
-  description = "Zones where worker nodes may run. For a zonal cluster, typically a single zone matching cluster_location."
+  description = "Extra zones for a multi-zonal or regional cluster. Leave empty for a zonal cluster; its nodes run in cluster_location. Do not repeat cluster_location here."
 }
 
 variable "cluster_name" {

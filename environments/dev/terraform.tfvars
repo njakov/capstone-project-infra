@@ -7,7 +7,7 @@ db_tier              = "db-f1-micro"
 db_availability_type = "ZONAL"
 
 gke_cluster_location       = "europe-west1-c"
-gke_node_locations         = ["europe-west1-c"]
+gke_node_locations         = []
 gke_min_nodes              = 1
 gke_max_nodes              = 2
 gke_machine_type           = "e2-standard-2"
