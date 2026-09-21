@@ -3,6 +3,16 @@ output "artifact_registry_url" {
   value       = module.artifact_registry.repo_url
 }
 
+output "app_sa_email" {
+  description = "App Workload Identity GCP SA email (for docs / local Helm --set)."
+  value       = module.identity.email
+}
+
+output "cloud_sql_connection_name" {
+  description = "Cloud SQL instance connection name (PROJECT:REGION:INSTANCE)."
+  value       = module.cloud_sql.instance_connection_name
+}
+
 output "arc_runner_scale_set_name" {
   description = "ARC scale set name for app workflow runs-on (null if ARC disabled)."
   value       = var.enable_arc ? module.arc[0].runner_scale_set_name : null

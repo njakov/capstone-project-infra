@@ -1,19 +1,34 @@
 #!/bin/bash
 
-# --- Configuration ---
-PROJECT_ID="project-17c62de2-ec01-476d-908"
-LOCATION="europe-west1"
+# Create the Terraform state bucket (KMS-encrypted) for the given GCP project.
+#
+# Usage: ./scripts/create-bucket.sh [env]
+#   env — optional; defaults to "dev". Reads environments/bootstrap/<env>.tfvars
+#         unless PROJECT_ID / REGION are already set in the environment.
+#
+# Identifiers:
+#   PROJECT_ID  — env, else project_id from bootstrap tfvars
+#   REGION      — env, else region from tfvars, else europe-west1
+#   BUCKET_NAME — always terraform-state-bucket-${PROJECT_ID}
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/config.sh
+source "${SCRIPT_DIR}/lib/config.sh"
+
+ENV="${1:-${ENV:-dev}}"
+TFVARS_FILE="${SCRIPT_DIR}/../environments/bootstrap/${ENV}.tfvars"
+
+resolve_gcp_config "$TFVARS_FILE"
+
+LOCATION="${REGION}"
 KEYRING="terraform-state-keyring"
 KEY_NAME="terraform-state-key"
 
-# NEW: Appended Project ID to make the bucket name globally unique
-BUCKET_NAME="terraform-state-bucket-${PROJECT_ID}"
+echo "Using PROJECT_ID=${PROJECT_ID} REGION=${LOCATION} BUCKET_NAME=${BUCKET_NAME}"
 
-
-# NEW: More robust error handling
-set -euo pipefail
-
-# NEW: Enable required APIs before trying to use them
+# Enable required APIs before trying to use them
 echo "Enabling required APIs (KMS and Storage) on project ${PROJECT_ID}..."
 gcloud services enable cloudkms.googleapis.com \
     storage.googleapis.com \
