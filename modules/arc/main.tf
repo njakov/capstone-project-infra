@@ -199,8 +199,15 @@ resource "helm_release" "arc_runners" {
               name = "runner"
               # Chart stays 0.10.1. Image is actions-runner 2.337.0 (2026-08-26),
               # pinned to that tag's multi-arch index digest.
+              # run-helper.sh exits 1 as uid 0 unless RUNNER_ALLOW_RUNASROOT is set.
               image   = "ghcr.io/actions/actions-runner@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4"
               command = ["/home/runner/run.sh"]
+              env = [
+                {
+                  name  = "RUNNER_ALLOW_RUNASROOT"
+                  value = "1"
+                }
+              ]
               securityContext = {
                 runAsUser = 0
               }
