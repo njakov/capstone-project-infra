@@ -5,8 +5,10 @@
 # Usage: ./scripts/negative-iam-tests.sh <env>
 # Example: ./scripts/negative-iam-tests.sh dev
 #
-# Expects PERMISSION_DENIED for each case. Run after setup_gcp + bootstrap with
-# terraform-sa still enabled (tests 1–2) and the infra runner SA present (tests 3–5).
+# Cases 1–5 expect PERMISSION_DENIED. Case 6 expects the runner to bind
+# roles/iam.workloadIdentityUser for a throwaway member, then remove it.
+# Run after setup_gcp + bootstrap with terraform-sa still enabled (tests 1–2)
+# and the infra runner SA present (tests 3–6).
 # Do not treat success as a green CI gate — these are manual / demo checks.
 #
 # Identifiers (override via env if needed):
@@ -129,6 +131,53 @@ expect_key_create_denied() {
   return 1
 }
 
+# Runner must be able to bind workloadIdentityUser (the condition allows that
+# role, and getIamPolicy must succeed so the read-modify-write works). The
+# member is a probe KSA that does not exist; remove the binding before return.
+expect_wi_bind_allowed() {
+  local label="$1"
+  local sa_email="$2"
+  local member output status remove_output remove_status
+
+  member="serviceAccount:${PROJECT_ID}.svc.id.goog[petclinic/iam-condition-probe]"
+
+  echo ""
+  echo "=== ${label} ==="
+  set +e
+  output="$(gcloud iam service-accounts add-iam-policy-binding "${sa_email}" \
+    --project="${PROJECT_ID}" \
+    --member="${member}" \
+    --role="roles/iam.workloadIdentityUser" \
+    --impersonate-service-account="${RUNNER_SA}" \
+    --quiet 2>&1)"
+  status=$?
+  set -e
+  if [ "${status}" -ne 0 ]; then
+    echo "FAIL: workloadIdentityUser bind was denied."
+    echo "${output}"
+    return 1
+  fi
+  echo "OK: workloadIdentityUser bind succeeded."
+
+  set +e
+  remove_output="$(gcloud iam service-accounts remove-iam-policy-binding "${sa_email}" \
+    --project="${PROJECT_ID}" \
+    --member="${member}" \
+    --role="roles/iam.workloadIdentityUser" \
+    --impersonate-service-account="${RUNNER_SA}" \
+    --quiet 2>&1)"
+  remove_status=$?
+  set -e
+  if [ "${remove_status}" -ne 0 ]; then
+    echo "FAIL: could not remove probe binding ${member} on ${sa_email}."
+    echo "${remove_output}"
+    echo "Remove it manually before re-running."
+    return 1
+  fi
+  echo "OK: probe binding removed."
+  return 0
+}
+
 failures=0
 
 # 1) terraform-sa must not bind roles/owner (off the binder allow-list).
@@ -234,10 +283,18 @@ if ! expect_denied \
   failures=$((failures + 1))
 fi
 
+# 6) The same condition must allow workloadIdentityUser. A denial here means
+#    getIamPolicy is blocked (for example by size() > 0 on an empty grant list).
+if ! expect_wi_bind_allowed \
+  "6. Impersonate runner → bind workloadIdentityUser on app SA, then remove it" \
+  "${APP_SA}"; then
+  failures=$((failures + 1))
+fi
+
 echo ""
 if [ "${failures}" -eq 0 ]; then
-  echo "All negative IAM tests denied as expected."
+  echo "All IAM checks matched expectations."
   exit 0
 fi
-echo "${failures} negative IAM test(s) did not deny as expected."
+echo "${failures} IAM check(s) did not match expectations."
 exit 1

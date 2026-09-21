@@ -57,16 +57,19 @@ jobs:
         env:
           INPUT_ENV: ${{ inputs.environment }}
           INPUT_REF: ${{ inputs.ref }}
-          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
           EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # 1. Determine Environment & Ref
+          # 1. Determine Environment and the ref to resolve once for this run.
+          # Push is already a commit. Dispatch uses the optional input, else the
+          # commit of the workflow file selected in the UI.
           if [ "$EVENT_NAME" = "push" ]; then
             ENV="dev"
-            REF="${GITHUB_REF#refs/heads/}"
+            RAW_REF="${GITHUB_SHA}"
           else
             ENV="${INPUT_ENV:-dev}"
-            REF="${INPUT_REF:-${GITHUB_REF#refs/heads/}}"
+            RAW_REF="${INPUT_REF:-${GITHUB_SHA}}"
           fi
 
           case "$ENV" in
@@ -79,22 +82,38 @@ jobs:
 
           # A newline in ref would add extra $GITHUB_OUTPUT lines and overwrite
           # environment, work_dir, or runner_label. EOF is the output delimiter.
-          case "$REF" in
+          case "$RAW_REF" in
             ""|EOF|*$'\n'*|*$'\r'*)
               echo "::error::Invalid ref."
               exit 1
               ;;
           esac
 
-          # 2. Safety Guard: Block Prod deployments from non-main branches
-          if [ "$ENV" = "prod" ] && [ "$REF" != "main" ]; then
-            echo "::error title=Deployment Denied::Production deployments are strictly limited to the 'main' branch. You tried: $REF"
+          # 2. Pin every later job to this SHA. Branch and tag names are
+          # resolved once here so a moving ref cannot change between jobs.
+          encoded_ref="$(jq -rn --arg r "${RAW_REF}" '$r|@uri')"
+          SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
+          if ! printf '%s' "${SHA}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::Could not resolve ref to a commit SHA."
             exit 1
           fi
 
-          # 3. Output Variables
+          # 3. Prod may deploy a commit that is the tip of main (identical) or
+          # an ancestor of main (behind). Dev may pin any resolved SHA.
+          if [ "$ENV" = "prod" ]; then
+            compare_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${SHA}" --jq .status)"
+            case "$compare_status" in
+              identical|behind) ;;
+              *)
+                echo "::error title=Deployment Denied::Commit ${SHA} is not contained in main (compare status: ${compare_status})."
+                exit 1
+                ;;
+            esac
+          fi
+
+          # 4. Output Variables
           echo "Selected Environment: $ENV"
-          echo "Selected Ref: $REF"
+          echo "Selected Ref: $SHA"
 
           {
             echo "environment<<EOF"
@@ -107,7 +126,7 @@ jobs:
             echo "$ENV"
             echo "EOF"
             echo "ref_to_checkout<<EOF"
-            echo "$REF"
+            echo "$SHA"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -328,16 +347,19 @@ jobs:
         run: |
           plan_object="gs://${TF_STATE_BUCKET}/plans/${TARGET_ENV}/${GITHUB_RUN_ID}.tfplan"
           gcloud storage cp "${plan_object}" tfplan
-          set +e
           terraform apply -lock-timeout=5m tfplan
-          status=$?
-          gcloud storage rm --all-versions "${plan_object}"
-          rm_status=$?
           rm -f tfplan
-          if [ "${status}" -ne 0 ]; then
-            exit "${status}"
+
+      - name: Delete applied plan
+        if: success()
+        env:
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          plan_object="gs://${TF_STATE_BUCKET}/plans/${TARGET_ENV}/${GITHUB_RUN_ID}.tfplan"
+          if ! gcloud storage rm --all-versions "${plan_object}"; then
+            echo "::warning::Failed to delete ${plan_object}. The 1-day plans/ lifecycle will remove it."
+            exit 0
           fi
-          exit "${rm_status}"
 
   # Destroy applies the destroy plan saved by the plan job. No auto-approve destroy.
   destroy:
@@ -399,13 +421,16 @@ jobs:
         run: |
           plan_object="gs://${TF_STATE_BUCKET}/plans/${TARGET_ENV}/${GITHUB_RUN_ID}.tfplan"
           gcloud storage cp "${plan_object}" tfplan
-          set +e
           terraform apply -lock-timeout=5m tfplan
-          status=$?
-          gcloud storage rm --all-versions "${plan_object}"
-          rm_status=$?
           rm -f tfplan
-          if [ "${status}" -ne 0 ]; then
-            exit "${status}"
+
+      - name: Delete applied destroy plan
+        if: success()
+        env:
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          plan_object="gs://${TF_STATE_BUCKET}/plans/${TARGET_ENV}/${GITHUB_RUN_ID}.tfplan"
+          if ! gcloud storage rm --all-versions "${plan_object}"; then
+            echo "::warning::Failed to delete ${plan_object}. The 1-day plans/ lifecycle will remove it."
+            exit 0
           fi
-          exit "${rm_status}"

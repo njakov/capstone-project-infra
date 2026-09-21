@@ -147,6 +147,7 @@ module "artifact_registry" {
   project_id    = var.project_id
   region        = var.region
   repository_id = "${var.app_name}-repo-${var.env}"
+  writer_member = "serviceAccount:${local.app_runner_sa_email}"
 }
 
 # ------------------------------------------------------------------------------
