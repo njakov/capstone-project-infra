@@ -22,9 +22,8 @@ Related: [ADR 001](adr/001-runner-isolation.md), Gate E in the three-implementat
 
 ### 1. Infra runner online
 
-1. Bootstrap already applied (infra VPC + peering + `runner-vm-infra-dev`).
+1. Bootstrap already applied (infra VPC + `runner-vm-infra-dev`). Peering is created by the env apply, not bootstrap.
 2. IAP SSH → register GitHub runner with labels **`self-hosted,infra,dev`**.
-3. Verify: from the VM, `gcloud container clusters get-credentials --dns-endpoint` + `kubectl get nodes` (Gate C). Peering does not reach the private IP control plane; Terraform uses the DNS endpoint over Private Google Access.
 
 ### 2. Apply env stack — runner pool, Secret Manager shells, External Secrets, arc-runners
 
@@ -44,6 +43,21 @@ Expect:
 - Namespace `arc-runners`, plus the External Secrets operator in namespace `external-secrets`
 - `ExternalSecret` `arc-github-app` in `arc-runners`. It is not Ready until the three secret versions exist. Terraform does not create Kubernetes secret `arc-github-app`.
 - Terraform outputs `arc_github_app_secret_ids` and `arc_runner_scale_set_name` (`petclinic-arc-dev`)
+
+Gate C, from the infra runner, after this apply. Dev is zonal (`europe-west1-c`). Peering does not reach the private IP control plane; this uses the DNS endpoint.
+
+```bash
+PROJECT_ID="<your-gcp-project>"
+ENV=dev
+APP_NAME=petclinic
+
+gcloud container clusters get-credentials "${APP_NAME}-gke-${ENV}" \
+  --location=europe-west1-c \
+  --project="${PROJECT_ID}" \
+  --dns-endpoint
+
+kubectl get nodes
+```
 
 ### 3. Create a GitHub App (once per org/user)
 
@@ -80,11 +94,10 @@ Do not create that secret with `kubectl`, and do not import it into Terraform. A
 ```bash
 PROJECT_ID="<your-gcp-project>"
 ENV=dev
-REGION=europe-west1
 APP_NAME=petclinic
 
 gcloud container clusters get-credentials "${APP_NAME}-gke-${ENV}" \
-  --region="${REGION}" \
+  --location=europe-west1-c \
   --project="${PROJECT_ID}" \
   --dns-endpoint
 
@@ -131,7 +144,7 @@ Plan + apply again. Expect:
 
 ## Prod cutover (only after Gate E green on dev)
 
-Repeat the same sequence with `ENV=prod` / `runner-vm-infra-prod` / labels `self-hosted,infra,prod` / secrets `*-prod` / scale set `petclinic-arc-prod`.
+Repeat the same sequence with `ENV=prod` / `runner-vm-infra-prod` / labels `self-hosted,infra,prod` / secrets `*-prod` / scale set `petclinic-arc-prod`. Prod is regional: pass `--location=europe-west1` instead of `--location=europe-west1-c`.
 
 Rules:
 

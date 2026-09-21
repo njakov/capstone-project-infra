@@ -5,9 +5,10 @@ variable "allowed_source_ranges" {
   validation {
     condition = (
       length(var.allowed_source_ranges) > 0 &&
-      !contains(var.allowed_source_ranges, "0.0.0.0/0")
+      !contains(var.allowed_source_ranges, "0.0.0.0/0") &&
+      !contains(var.allowed_source_ranges, "::/0")
     )
-    error_message = "allowed_source_ranges must be a non-empty list and must not include 0.0.0.0/0. Set your operator or VPN CIDR in env tfvars."
+    error_message = "allowed_source_ranges must be a non-empty list and must not include 0.0.0.0/0 or ::/0. Set your operator or VPN CIDR in env tfvars."
   }
 }
 

@@ -52,11 +52,12 @@ module "peering" {
 }
 
 # ------------------------------------------------------------------------------
-# 4. IDENTITY: Workload Identity bindings only (SAs from bootstrap-iam)
+# 4. IDENTITY: Workload Identity plus app-runner Kubernetes RBAC.
+# ingress-nginx must exist first (middleware Helm creates that namespace).
 # ------------------------------------------------------------------------------
 module "identity" {
   source     = "../../modules/identity"
-  depends_on = [module.gke]
+  depends_on = [module.gke, module.middleware]
 
   project_id                = var.project_id
   app_sa_email              = local.app_sa_email
@@ -189,7 +190,7 @@ module "external_secrets" {
   count = var.enable_arc ? 1 : 0
 
   source     = "../../modules/external-secrets"
-  depends_on = [module.gke, module.arc]
+  depends_on = [module.gke, module.arc, module.identity]
 
   project_id                = var.project_id
   env                       = var.env

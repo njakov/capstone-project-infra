@@ -25,10 +25,11 @@ resource "google_container_cluster" "primary" {
   }
 
   # Peering is not transitive, and Regular-channel control planes use PSC, so
-  # the infra runner reaches the API by this name over Private Google Access.
-  # Callers must present a Google identity with container.clusters.connect.
+  # Terraform uses this DNS name instead of the private IP.
+  # allow_external_traffic has no network allowlist: the name is reachable from
+  # any network that can reach Google APIs. Master authorized networks apply
+  # only to the IP endpoint. Callers still need container.clusters.connect.
   # Kubernetes ServiceAccount tokens and client certs stay disabled on this name.
-  # IP endpoints stay enabled and remain limited by master authorized networks.
   control_plane_endpoints_config {
     dns_endpoint_config {
       allow_external_traffic    = true

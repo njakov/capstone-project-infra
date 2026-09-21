@@ -64,14 +64,14 @@ Infra ↔ app VPC peering (env-owned) still connects the two VPCs. Control-plane
 | Identity | Purpose | Notable roles |
 |----------|---------|---------------|
 | `terraform-sa` (local only) | Chicken-egg **bootstrap** from a laptop (optional break-glass). **Not** used by `infra-pipeline`. Locked after bootstrap by **disabling the SA**. | `networkAdmin`, `instanceAdmin.v1`, `securityAdmin`, `serviceAccountAdmin`, **conditioned** `projectIamAdmin` (`modifiedGrantsByRole` allow-list), `serviceUsageConsumer`; bucket `storage.objectAdmin` only. **No** project-level `serviceAccountUser`, **no** `container.admin` / `cloudsql.admin` / `secretmanager.admin` / `artifactregistry.admin`, **no** bucket `storage.admin`. Operator gets `roles/iam.serviceAccountTokenCreator` only — no SA JSON keys. |
-| `github-infra-runner-sa-{env}` (GCE) | Day-2 Terraform apply (`infra-pipeline.yml`) | Project: `networkAdmin`, `container.admin`, `cloudsql.admin`, `secretmanager.admin`, `artifactregistry.admin`, `serviceUsageConsumer`; bucket `objectAdmin`. **No** `projectIamAdmin`, **no** project-level `serviceAccountAdmin` / `serviceAccountUser`. Resource-level (bootstrap D6): SA admin on app + app-runner SAs; `serviceAccountUser` on node SA. |
-| `github-app-runner-sa-{env}` (WI → ARC) | App build/deploy only | `artifactregistry.writer`, `container.developer` — **no** `projectIamAdmin`, **no** state admin, **no** `networkAdmin`, **no** `secretmanager.admin` |
+| `github-infra-runner-sa-{env}` (GCE) | Day-2 Terraform apply (`infra-pipeline.yml`) | Project: `networkAdmin`, `container.admin`, `cloudsql.admin`, `secretmanager.admin`, `artifactregistry.admin`, `serviceUsageConsumer`; bucket `objectAdmin`. **No** `projectIamAdmin`, **no** project-level `serviceAccountAdmin` / `serviceAccountUser`. Resource-level (bootstrap D6): `infraRunnerWorkloadIdentityAdmin` on the app, app-runner, and external-secrets accounts, conditioned so `setIamPolicy` may only change `roles/iam.workloadIdentityUser`; `serviceAccountUser` on the node SA. |
+| `github-app-runner-sa-{env}` (WI → ARC) | App build/deploy only | `artifactregistry.writer`, custom role `arcAppDeploy` (`container.clusters.get`, `container.clusters.getCredentials`, `container.clusters.connect`, `container.namespaces.get`). Kubernetes RBAC is a Role in `petclinic` plus get/list Services in `ingress-nginx`. **No** `container.developer`, **no** `container.secrets.*`, **no** namespace create/update, **no** binding in `arc-runners`, **no** `projectIamAdmin`, **no** state admin, **no** `networkAdmin`, **no** `secretmanager.admin` |
 
-**Binder allow-list** (CEL on terraform-sa `projectIamAdmin`): workload grant roles only (`networkAdmin`, `container.admin`, `cloudsql.admin`, `secretmanager.admin`, `artifactregistry.admin`, `serviceUsageConsumer`, log/metric writers, AR reader/writer, `container.developer`, `cloudsql.client`). Off-list roles (incl. `owner`, `projectIamAdmin`, SA admin/user) → fix Terraform, **do not widen CEL**. Cleanup of off-list roles is Owner-only.
+**Binder allow-list** (CEL on terraform-sa `projectIamAdmin`): workload grant roles only (`networkAdmin`, `container.admin`, `cloudsql.admin`, `secretmanager.admin`, `artifactregistry.admin`, `serviceUsageConsumer`, log/metric writers, AR reader/writer, `container.developer`, `cloudsql.client`, `projects/<project>/roles/arcAppDeploy`). `container.developer` stays on the list so bootstrap can revoke the old app-runner binding. It is not granted to any member. Off-list roles (incl. `owner`, `projectIamAdmin`, SA admin/user) → fix Terraform, **do not widen CEL**. Cleanup of off-list roles is Owner-only.
 
 **Auth model:** keyless. Local bootstrap = user ADC + impersonate `terraform-sa` (`GOOGLE_IMPERSONATE_SERVICE_ACCOUNT` + `environments/bootstrap/provider.tf`). `setup-terraform-sa.sh` is the **only** IAM writer; `bootstrap-env.sh` impersonates + apply only (fail closed if terraform-sa is disabled). After a successful apply it runs `scripts/lock-terraform-sa.sh` and disables the SA; `set -e` skips the lock when apply fails. Break-glass stays in that script: enable the SA, re-run bootstrap, lock again. Day-2 CI = GCE metadata credentials for `github-infra-runner-sa-{env}` (not `terraform-sa`, not GitHub→GCP OIDC).
 
-**Negative IAM tests** (teaching demo; `scripts/negative-iam-tests.sh`): terraform-sa cannot bind `roles/owner` or create GKE/SQL; runner cannot `setIamPolicy` on `terraform-sa` or mint keys on the workload service accounts, including `external-secrets-{env}`. Expect `PERMISSION_DENIED`.
+**Negative IAM tests** (teaching demo; `scripts/negative-iam-tests.sh`): terraform-sa cannot bind `roles/owner` or create GKE/SQL; runner cannot `setIamPolicy` on `terraform-sa`, cannot bind `roles/iam.serviceAccountKeyAdmin` on the workload service accounts, and cannot mint keys on those accounts, including `external-secrets-{env}`. Expect `PERMISSION_DENIED`.
 
 **Who creates what:**
 
@@ -86,7 +86,7 @@ Infra ↔ app VPC peering (env-owned) still connects the two VPCs. Control-plane
 | Residual | Why it remains |
 |----------|----------------|
 | Runner `networkAdmin` + four `*admin` roles **inside its project** | Isolation is the **other project**, not in-project narrowing of those admins |
-| D6: runner can create keys on app / app-runner SAs | CEL does not constrain project-level `serviceAccountAdmin` on terraform-sa; D6 is a **code convention** until terraform-sa is disabled. Runner cannot `setIamPolicy` on `terraform-sa` |
+| D6 custom role includes `setIamPolicy` | The binding condition allows only `roles/iam.workloadIdentityUser`. Key admin and token-creator grants are denied. `terraform-sa` still has project `serviceAccountAdmin` until it is disabled |
 | State + `secretmanager.admin` | DB passwords available to the infra runner **by design** |
 | Human Gmail user stays Owner | Real break-glass; never put `roles/owner` on an SA |
 
@@ -95,7 +95,7 @@ Infra ↔ app VPC peering (env-owned) still connects the two VPCs. Control-plane
 | Gain | Cost |
 |------|------|
 | Bootstrap is chicken-egg; terraform-sa cannot touch GKE/SQL | First env apply creates the app VPC and peering; Terraform reaches the control plane through the DNS endpoint |
-| Runner cannot rewrite project IAM or hijack terraform-sa | Runner owns app VPC (`networkAdmin`); D6 is code until terraform-sa is disabled |
+| Runner cannot rewrite project IAM or hijack terraform-sa | Runner owns app VPC (`networkAdmin`). D6 `setIamPolicy` may only change `roles/iam.workloadIdentityUser` |
 | Dev runner cannot touch prod | Second project + second bootstrap for 2–3 days |
 | Dev is cheaper / zonal; prod shows real HA | Two GKE topologies in one module (`cluster_location` on cluster + both node pools) |
 
@@ -115,9 +115,9 @@ Infra ↔ app VPC peering (env-owned) still connects the two VPCs. Control-plane
 - No org / folders / deny policies on trial Gmail
 - Same GKE cluster for app workloads and ARC runners (within each project)
 - Runner retains `networkAdmin` + workload `*admin` **inside** its project
-- D6 residual (keys on app/app-runner SAs) until terraform-sa is disabled
+- D6 `setIamPolicy` is limited to `roles/iam.workloadIdentityUser`. `terraform-sa` can still mint keys until `lock-terraform-sa.sh` disables it
 - Prometheus may force a bigger **single** dev node (machine type, not zone count)
-- DNS endpoint is reachable from any network that can reach Google APIs; the gate is IAM (`container.clusters.connect`). Kubernetes tokens and client certs on that name stay off. No VPC Service Controls on this trial account. The private IP endpoint stays limited to the app and infra subnet CIDRs
+- DNS endpoint has no network allowlist. Master authorized networks do not apply to that name. It is reachable from any network that can reach Google APIs; the gate is IAM (`container.clusters.connect`). Kubernetes tokens and client certs on that name stay off. No VPC Service Controls on this trial account. The private IP endpoint stays limited to the app and infra subnet CIDRs
 - HTTP-only Ingress (source-restricted LoadBalancer; no cert-manager in MVP)
 - Manual GCE runner registration via IAP SSH
 - No GitHub→GCP OIDC for Terraform yet (trust stays on GCE SA / ARC WI)

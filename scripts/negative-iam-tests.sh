@@ -6,7 +6,7 @@
 # Example: ./scripts/negative-iam-tests.sh dev
 #
 # Expects PERMISSION_DENIED for each case. Run after setup_gcp + bootstrap with
-# terraform-sa still enabled (tests 1–2) and the infra runner SA present (tests 3–4).
+# terraform-sa still enabled (tests 1–2) and the infra runner SA present (tests 3–5).
 # Do not treat success as a green CI gate — these are manual / demo checks.
 #
 # Identifiers (override via env if needed):
@@ -199,6 +199,38 @@ fi
 if ! expect_key_create_denied \
   "4d. Impersonate runner → keys create on external-secrets SA" \
   "${EXTERNAL_SECRETS_SA}"; then
+  failures=$((failures + 1))
+fi
+
+# 5) Runner setIamPolicy may only change workloadIdentityUser. Binding key admin
+#    must be denied before any key is minted. This does not create a key.
+if ! expect_denied \
+  "5a. Impersonate runner → bind keyAdmin on app SA" \
+  gcloud iam service-accounts add-iam-policy-binding "${APP_SA}" \
+    --project="${PROJECT_ID}" \
+    --member="serviceAccount:${RUNNER_SA}" \
+    --role="roles/iam.serviceAccountKeyAdmin" \
+    --impersonate-service-account="${RUNNER_SA}"; then
+  failures=$((failures + 1))
+fi
+
+if ! expect_denied \
+  "5b. Impersonate runner → bind keyAdmin on app-runner SA" \
+  gcloud iam service-accounts add-iam-policy-binding "${APP_RUNNER_SA}" \
+    --project="${PROJECT_ID}" \
+    --member="serviceAccount:${RUNNER_SA}" \
+    --role="roles/iam.serviceAccountKeyAdmin" \
+    --impersonate-service-account="${RUNNER_SA}"; then
+  failures=$((failures + 1))
+fi
+
+if ! expect_denied \
+  "5c. Impersonate runner → bind keyAdmin on external-secrets SA" \
+  gcloud iam service-accounts add-iam-policy-binding "${EXTERNAL_SECRETS_SA}" \
+    --project="${PROJECT_ID}" \
+    --member="serviceAccount:${RUNNER_SA}" \
+    --role="roles/iam.serviceAccountKeyAdmin" \
+    --impersonate-service-account="${RUNNER_SA}"; then
   failures=$((failures + 1))
 fi
 

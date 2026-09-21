@@ -15,9 +15,12 @@ locals {
     "roles/artifactregistry.reader",
   ])
 
+  # arcAppDeploy is created by scripts/setup-terraform-sa.sh.
+  # container.developer stays on the terraform-sa CEL allow-list so this
+  # binding can be revoked, and is not granted here.
   app_runner_roles = toset([
     "roles/artifactregistry.writer",
-    "roles/container.developer",
+    "projects/${var.project_id}/roles/arcAppDeploy",
   ])
 
   # Created by scripts/setup-terraform-sa.sh (terraform-sa has no roleAdmin).
@@ -101,18 +104,36 @@ resource "google_service_account_iam_member" "runner_admin_on_app_sa" {
   service_account_id = google_service_account.app_sa.name
   role               = local.runner_wi_admin_role
   member             = "serviceAccount:${var.runner_sa_email}"
+
+  condition {
+    title       = "workload-identity-user-only"
+    description = "setIamPolicy may only change roles/iam.workloadIdentityUser"
+    expression  = "api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).hasOnly(['roles/iam.workloadIdentityUser']) && api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).size() > 0"
+  }
 }
 
 resource "google_service_account_iam_member" "runner_admin_on_app_runner_sa" {
   service_account_id = google_service_account.app_runner_sa.name
   role               = local.runner_wi_admin_role
   member             = "serviceAccount:${var.runner_sa_email}"
+
+  condition {
+    title       = "workload-identity-user-only"
+    description = "setIamPolicy may only change roles/iam.workloadIdentityUser"
+    expression  = "api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).hasOnly(['roles/iam.workloadIdentityUser']) && api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).size() > 0"
+  }
 }
 
 resource "google_service_account_iam_member" "runner_admin_on_external_secrets" {
   service_account_id = google_service_account.external_secrets.name
   role               = local.runner_wi_admin_role
   member             = "serviceAccount:${var.runner_sa_email}"
+
+  condition {
+    title       = "workload-identity-user-only"
+    description = "setIamPolicy may only change roles/iam.workloadIdentityUser"
+    expression  = "api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).hasOnly(['roles/iam.workloadIdentityUser']) && api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).size() > 0"
+  }
 }
 
 resource "google_service_account_iam_member" "runner_user_on_node_sa" {

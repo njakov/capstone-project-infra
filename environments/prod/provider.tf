@@ -21,17 +21,22 @@ provider "google" {
   region  = var.region
 }
 
-data "google_client_config" "default" {}
-
 # DNS endpoint presents a Google-managed certificate. Passing the cluster CA fails TLS.
+# The auth plugin refreshes the Google token across a long apply.
 provider "helm" {
   kubernetes = {
-    host  = "https://${module.gke.cluster_dns_endpoint}"
-    token = data.google_client_config.default.access_token
+    host = "https://${module.gke.cluster_dns_endpoint}"
+    exec = {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "gke-gcloud-auth-plugin"
+    }
   }
 }
 
 provider "kubernetes" {
-  host  = "https://${module.gke.cluster_dns_endpoint}"
-  token = data.google_client_config.default.access_token
+  host = "https://${module.gke.cluster_dns_endpoint}"
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "gke-gcloud-auth-plugin"
+  }
 }

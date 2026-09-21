@@ -74,6 +74,22 @@ gcloud config set project "$PROJECT_ID"
 echo -e "\n${BLUE}[1/3] Verifying terraform-sa is present and enabled...${NC}"
 require_terraform_sa_enabled
 
+echo "Verifying custom roles from setup-terraform-sa.sh..."
+for role_id in infraRunnerWorkloadIdentityAdmin arcAppDeploy; do
+  if ! role_deleted="$(gcloud iam roles describe "${role_id}" \
+    --project="${PROJECT_ID}" \
+    --format='value(deleted)' 2>/dev/null)"; then
+    echo "Error: custom role ${role_id} is missing in ${PROJECT_ID}."
+    echo "Run ./scripts/setup-terraform-sa.sh ${ENV} first."
+    exit 1
+  fi
+  if [ "${role_deleted}" = "True" ] || [ "${role_deleted}" = "true" ]; then
+    echo "Error: custom role ${role_id} is deleted in ${PROJECT_ID}."
+    echo "Run ./scripts/setup-terraform-sa.sh ${ENV} first."
+    exit 1
+  fi
+done
+
 # ==============================================================================
 # STEP 4: TERRAFORM APPLY (as terraform-sa via impersonation — not as the human user)
 # ==============================================================================

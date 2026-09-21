@@ -78,4 +78,32 @@ gcloud storage buckets update "gs://$BUCKET_NAME" --public-access-prevention=enf
 echo "Enabling versioning on bucket: $BUCKET_NAME..."
 gcloud storage buckets update "gs://$BUCKET_NAME" --versioning
 
+# Replaces the bucket lifecycle config. This bucket has no other rules.
+# plans/ holds terraform plan files (they contain secret values). Jobs delete
+# the object; this rule is the backstop, including noncurrent versions.
+echo "Setting 1-day lifecycle on plans/ in bucket: $BUCKET_NAME..."
+LIFECYCLE_FILE="$(mktemp)"
+trap 'rm -f "${LIFECYCLE_FILE}"' EXIT
+cat > "${LIFECYCLE_FILE}" <<'EOF'
+{
+  "rule": [
+    {
+      "action": {"type": "Delete"},
+      "condition": {
+        "age": 1,
+        "matchesPrefix": ["plans/"]
+      }
+    },
+    {
+      "action": {"type": "Delete"},
+      "condition": {
+        "daysSinceNoncurrentTime": 1,
+        "matchesPrefix": ["plans/"]
+      }
+    }
+  ]
+}
+EOF
+gcloud storage buckets update "gs://${BUCKET_NAME}" --lifecycle-file="${LIFECYCLE_FILE}"
+
 echo "Versioning enabled successfully. Your backend bucket is ready."

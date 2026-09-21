@@ -28,6 +28,8 @@ TERRAFORM_SA_ROLES=(
 
 # Roles terraform-sa may grant/revoke via conditioned projectIamAdmin.
 # Do not add owner/editor/projectIamAdmin/securityAdmin/serviceAccountUser/Admin.
+# container.developer stays so bootstrap can revoke the old app-runner binding.
+# It is not granted to any member. arcAppDeploy is appended in the expression.
 TERRAFORM_SA_IAM_BINDER_ALLOWLIST=(
   "roles/compute.networkAdmin"
   "roles/container.admin"
@@ -47,7 +49,15 @@ TERRAFORM_SA_IAM_BINDER_ALLOWLIST=(
 terraform_sa_iam_binder_condition_expression() {
   local joined=""
   local role
-  for role in "${TERRAFORM_SA_IAM_BINDER_ALLOWLIST[@]}"; do
+  local -a roles=("${TERRAFORM_SA_IAM_BINDER_ALLOWLIST[@]}")
+
+  if [ -z "${PROJECT_ID:-}" ]; then
+    echo "Error: PROJECT_ID is not set before terraform_sa_iam_binder_condition_expression." >&2
+    return 1
+  fi
+  roles+=("projects/${PROJECT_ID}/roles/arcAppDeploy")
+
+  for role in "${roles[@]}"; do
     if [ -n "${joined}" ]; then
       joined="${joined}, "
     fi
