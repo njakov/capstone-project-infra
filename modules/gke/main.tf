@@ -79,6 +79,16 @@ resource "google_container_cluster" "primary" {
   remove_default_node_pool = true
   initial_node_count       = 1
 
+  # GKE still builds a default pool during create, then deletes it. Without
+  # this, that pool uses the default Compute Engine SA and the runner cannot
+  # act as it. The kept pools set the same account in node_pool.tf.
+  node_config {
+    service_account = var.node_service_account_email
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/cloud-platform"
+    ]
+  }
+
   resource_labels = var.labels
 
   secret_manager_config {
