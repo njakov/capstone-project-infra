@@ -50,3 +50,74 @@ variable "gke_maintenance_start_time" {
   type        = string
   default     = "03:00"
 }
+
+variable "master_ipv4_cidr_block" {
+  description = "GKE control-plane /28 CIDR. Must be unique per cluster in this project (dev vs prod)."
+  type        = string
+}
+
+variable "allowed_source_ranges" {
+  description = "CIDR blocks allowed to reach the Ingress LoadBalancer (operator IP/VPN). Not world-open."
+  type        = list(string)
+}
+
+variable "grafana_admin_password" {
+  description = "Optional Grafana admin password for kube-prometheus-stack. Null keeps chart default (prom-operator). Prefer TF_VAR / Secret Manager — do not commit."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+# ------------------------------------------------------------------------------
+# GKE runner node pool (ARC)
+# ------------------------------------------------------------------------------
+variable "gke_runner_machine_type" {
+  type        = string
+  description = "Machine type for the tainted ARC runner node pool."
+  default     = "e2-standard-4"
+}
+
+variable "gke_runner_min_nodes" {
+  type        = number
+  description = "Minimum nodes in the ARC runner pool (0 = scale-to-zero)."
+  default     = 0
+}
+
+variable "gke_runner_max_nodes" {
+  type        = number
+  description = "Maximum nodes in the ARC runner pool."
+  default     = 2
+}
+
+# ------------------------------------------------------------------------------
+# ARC (Actions Runner Controller)
+# ------------------------------------------------------------------------------
+variable "enable_arc" {
+  type        = bool
+  description = "Provision ARC Secret Manager shells (and charts when arc_install_charts is true)."
+  default     = true
+}
+
+variable "arc_install_charts" {
+  type        = bool
+  description = "Install ARC Helm releases. Keep false until GitHub App secret versions exist (see docs/arc-cutover.md)."
+  default     = false
+}
+
+variable "arc_github_config_url" {
+  type        = string
+  description = "GitHub URL the ARC scale set registers against (app repo)."
+  default     = "https://github.com/njakov/capstone-project-app"
+}
+
+variable "arc_min_runners" {
+  type        = number
+  description = "Minimum idle ARC runners."
+  default     = 0
+}
+
+variable "arc_max_runners" {
+  type        = number
+  description = "Maximum concurrent ARC runners."
+  default     = 3
+}

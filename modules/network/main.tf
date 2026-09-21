@@ -5,7 +5,7 @@ resource "google_compute_network" "main" {
   auto_create_subnetworks = false
 }
 
-# 2. Create the private subnet for GKE and the runner
+# 2. Create the private subnet (optional GKE secondary ranges)
 resource "google_compute_subnetwork" "private" {
   project       = var.project_id
   name          = "${var.network_name}-private"
@@ -21,14 +21,20 @@ resource "google_compute_subnetwork" "private" {
     metadata             = "INCLUDE_ALL_METADATA"
   }
 
-  # Define secondary ranges GKE will use
-  secondary_ip_range {
-    range_name    = "pods"
-    ip_cidr_range = var.pods_cidr
+  dynamic "secondary_ip_range" {
+    for_each = var.pods_cidr != null ? [var.pods_cidr] : []
+    content {
+      range_name    = "pods"
+      ip_cidr_range = secondary_ip_range.value
+    }
   }
-  secondary_ip_range {
-    range_name    = "services"
-    ip_cidr_range = var.services_cidr
+
+  dynamic "secondary_ip_range" {
+    for_each = var.services_cidr != null ? [var.services_cidr] : []
+    content {
+      range_name    = "services"
+      ip_cidr_range = secondary_ip_range.value
+    }
   }
 }
 

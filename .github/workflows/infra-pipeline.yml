@@ -82,7 +82,7 @@ jobs:
           echo "environment=$ENV" >> $GITHUB_OUTPUT
           # DYNAMIC PATH: This switches between environments/dev and environments/prod
           echo "work_dir=environments/$ENV" >> $GITHUB_OUTPUT
-          # DYNAMIC RUNNER: This picks the 'dev' or 'prod' runner label
+          # DYNAMIC RUNNER: env label (dev|prod); workflow adds the infra label
           echo "runner_label=$ENV" >> $GITHUB_OUTPUT
           echo "ref_to_checkout=$REF" >> $GITHUB_OUTPUT
 
@@ -90,7 +90,7 @@ jobs:
   validate_and_scan:
     name: Validate & Scan
     needs: setup
-    runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
+    runs-on: [self-hosted, infra, "${{ needs.setup.outputs.runner_label }}"]
     env:
       TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
       TF_VAR_region: ${{ secrets.GCP_REGION }}
@@ -136,7 +136,7 @@ jobs:
   plan:
     name: Terraform Plan
     needs: [setup, validate_and_scan]
-    runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
+    runs-on: [self-hosted, infra, "${{ needs.setup.outputs.runner_label }}"]
     # Run on Push, OR if Action is 'plan', OR if Action is 'apply' (Apply needs a Plan artifact!)
     if: github.event_name == 'push' || inputs.action == 'plan' || inputs.action == 'apply'
     env:
@@ -182,7 +182,7 @@ jobs:
   apply:
     name: Terraform Apply
     needs: [setup, plan]
-    runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
+    runs-on: [self-hosted, infra, "${{ needs.setup.outputs.runner_label }}"]
     # Only run if manually triggered with 'apply'
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
     environment: ${{ needs.setup.outputs.environment }}
@@ -228,7 +228,7 @@ jobs:
   destroy:
     name: Terraform Destroy
     needs: [setup, validate_and_scan]
-    runs-on: [self-hosted, "${{ needs.setup.outputs.runner_label }}"]
+    runs-on: [self-hosted, infra, "${{ needs.setup.outputs.runner_label }}"]
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
     environment: ${{ needs.setup.outputs.environment }}
     env:

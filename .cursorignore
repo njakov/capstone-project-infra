@@ -1,0 +1,19 @@
+# Terraform-generated data
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfplan
+**/crash.log*
+
+# Credentials and local environment files
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/service-account*.json
+**/credentials*.json
+
+# Editor and operating-system files
+**/.DS_Store
+**/.idea/
+**/.vscode/

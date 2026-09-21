@@ -23,13 +23,21 @@ variable "subnet_cidr" {
 }
 
 variable "pods_cidr" {
-  description = "The secondary IP range for Pods"
+  description = "Secondary IP range for GKE pods. Set to null to skip (infra VPCs)."
   type        = string
   default     = "10.20.0.0/16"
+  nullable    = true
 }
 
 variable "services_cidr" {
-  description = "The secondary IP range for Services"
+  description = "Secondary IP range for GKE services. Set to null to skip (infra VPCs)."
   type        = string
   default     = "10.30.0.0/16"
+  nullable    = true
+}
+
+variable "iap_ssh_target_tags" {
+  description = "If non-empty, create an IAP SSH firewall rule targeting only these network tags."
+  type        = list(string)
+  default     = []
 }

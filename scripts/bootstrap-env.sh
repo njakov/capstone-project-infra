@@ -112,3 +112,11 @@ echo "Applying configuration using ${ENV}.tfvars..."
 terraform apply -var-file="${ENV}.tfvars" -auto-approve
 
 echo -e "\n${GREEN}=== ${ENV} BOOTSTRAP COMPLETE ===${NC}"
+echo ""
+echo "Next steps:"
+echo "  1. IAP SSH to the infra runner (see terraform output runner_ssh_command)."
+echo "  2. Switch to the runner user: sudo -iu runner"
+echo "  3. Register the GitHub Actions runner with labels: self-hosted,infra,${ENV}"
+echo "  4. Apply environments/${ENV} via infra-pipeline.yml (runs-on: self-hosted,infra,${ENV})"
+echo ""
+echo "Docs: docs/adr/001-runner-isolation.md"

@@ -20,7 +20,20 @@ if ! command -v docker &> /dev/null; then
     apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 fi
 
-chmod 666 /var/run/docker.sock
+# Docker socket: group access only (never chmod 666).
+# Create a dedicated runner user and add it to the docker group.
+groupadd -f docker
+if ! id -u runner &>/dev/null; then
+    useradd --create-home --shell /bin/bash --groups docker runner
+else
+    usermod -aG docker runner
+fi
+systemctl enable --now docker || true
+# Ensure socket is owned by root:docker with restrictive mode once Docker is up
+if [ -S /var/run/docker.sock ]; then
+    chown root:docker /var/run/docker.sock
+    chmod 660 /var/run/docker.sock
+fi
 
 if ! command -v java &> /dev/null; then
   echo "Installing Java 25..."
@@ -89,3 +102,5 @@ echo "Configuring Docker Auth..."
 gcloud auth configure-docker --quiet
 
 echo "Installation Complete! Runner is ready."
+echo "Register the GitHub Actions runner as user 'runner' with labels: self-hosted,infra,<env>"
+echo "IAP SSH then: sudo -iu runner"
