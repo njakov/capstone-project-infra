@@ -19,7 +19,7 @@ variable "peering_name_b_to_a" {
 }
 
 variable "export_custom_routes" {
-  description = "Export custom routes (needed so peered VPC learns GKE master CIDR routes)"
+  description = "Export custom routes to the peered VPC. Control-plane access for Terraform is the GKE DNS endpoint, not these routes."
   type        = bool
   default     = true
 }

@@ -18,6 +18,8 @@
 #   1. Verify terraform-sa exists and is enabled (fail closed if disabled)
 #   2. Impersonate terraform-sa
 #   3. terraform init + apply for environments/bootstrap
+#   4. After a successful apply, disable terraform-sa (lock-terraform-sa.sh).
+#      set -e skips the lock if apply fails.
 #
 # Terraform auth: require_terraform_sa_impersonation exports
 # GOOGLE_IMPERSONATE_SERVICE_ACCOUNT=terraform-sa@... (user ADC must exist;
@@ -69,13 +71,13 @@ gcloud config set project "$PROJECT_ID"
 # STEP 3: PRE-FLIGHT (no IAM writes — setup_gcp.sh / setup-terraform-sa.sh only)
 # ==============================================================================
 
-echo -e "\n${BLUE}[1/2] Verifying terraform-sa is present and enabled...${NC}"
+echo -e "\n${BLUE}[1/3] Verifying terraform-sa is present and enabled...${NC}"
 require_terraform_sa_enabled
 
 # ==============================================================================
 # STEP 4: TERRAFORM APPLY (as terraform-sa via impersonation — not as the human user)
 # ==============================================================================
-echo -e "\n${BLUE}[2/2] Deploying Bootstrap Layer for ${ENV}...${NC}"
+echo -e "\n${BLUE}[2/3] Deploying Bootstrap Layer for ${ENV}...${NC}"
 
 require_terraform_sa_impersonation
 
@@ -91,14 +93,18 @@ terraform init \
 echo "Applying configuration using ${ENV}.tfvars..."
 terraform apply -var-file="${ENV}.tfvars" -auto-approve
 
+# set -e: a failed apply never reaches this. Drop Terraform's impersonation
+# env so gcloud disables the SA as the human user (lock-terraform-sa.sh).
+echo -e "\n${BLUE}[3/3] Locking terraform-sa after successful apply...${NC}"
+env -u GOOGLE_IMPERSONATE_SERVICE_ACCOUNT "${SCRIPT_DIR}/lock-terraform-sa.sh" "${ENV}"
+
 echo -e "\n${GREEN}=== ${ENV} BOOTSTRAP COMPLETE ===${NC}"
+echo "terraform-sa (${SA_EMAIL}) is disabled."
 echo ""
 echo "Next steps:"
-echo "  1. Lock terraform-sa (disable after bootstrap — CEL does not constrain serviceAccountAdmin):"
-echo "       ./scripts/lock-terraform-sa.sh ${ENV}"
-echo "  2. IAP SSH to the infra runner (see terraform output runner_ssh_command)."
-echo "  3. Switch to the runner user: sudo -iu runner"
-echo "  4. Register the GitHub Actions runner with labels: self-hosted,infra,${ENV}"
-echo "  5. Apply environments/${ENV} via infra-pipeline.yml (runs-on: self-hosted,infra,${ENV})"
+echo "  1. IAP SSH to the infra runner (see terraform output runner_ssh_command)."
+echo "  2. Switch to the runner user: sudo -iu runner"
+echo "  3. Register the GitHub Actions runner with labels: self-hosted,infra,${ENV}"
+echo "  4. Apply environments/${ENV} via infra-pipeline.yml (runs-on: self-hosted,infra,${ENV})"
 echo ""
 echo "Docs: docs/adr/001-runner-isolation.md"

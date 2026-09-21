@@ -2,9 +2,10 @@
 # 0. PRE-CREATED WORKLOAD SAs (bootstrap-iam; deterministic account_ids)
 # ------------------------------------------------------------------------------
 locals {
-  node_sa_email       = "${var.app_name}-gke-${var.env}-node-sa@${var.project_id}.iam.gserviceaccount.com"
-  app_sa_email        = "${var.app_name}-sa-${var.env}@${var.project_id}.iam.gserviceaccount.com"
-  app_runner_sa_email = "github-app-runner-sa-${var.env}@${var.project_id}.iam.gserviceaccount.com"
+  node_sa_email             = "${var.app_name}-gke-${var.env}-node-sa@${var.project_id}.iam.gserviceaccount.com"
+  app_sa_email              = "${var.app_name}-sa-${var.env}@${var.project_id}.iam.gserviceaccount.com"
+  app_runner_sa_email       = "github-app-runner-sa-${var.env}@${var.project_id}.iam.gserviceaccount.com"
+  external_secrets_sa_email = "external-secrets-${var.env}@${var.project_id}.iam.gserviceaccount.com"
 }
 
 # ------------------------------------------------------------------------------
@@ -38,7 +39,8 @@ data "google_compute_subnetwork" "infra_subnet" {
 }
 
 # ------------------------------------------------------------------------------
-# 3. PEERING: both legs + custom routes (infra runners → private GKE API)
+# 3. PEERING: both legs connect the infra and app VPCs.
+# Control-plane access for Terraform is the GKE DNS endpoint, not these routes.
 # ------------------------------------------------------------------------------
 module "peering" {
   source = "../../modules/network-peering"
@@ -56,13 +58,14 @@ module "identity" {
   source     = "../../modules/identity"
   depends_on = [module.gke]
 
-  project_id             = var.project_id
-  app_sa_email           = local.app_sa_email
-  k8s_namespace          = "petclinic"
-  k8s_sa_name            = var.app_name
-  app_runner_sa_email    = local.app_runner_sa_email
-  arc_runners_namespace  = "arc-runners"
-  arc_runner_k8s_sa_name = "arc-runner"
+  project_id                = var.project_id
+  app_sa_email              = local.app_sa_email
+  k8s_namespace             = "petclinic"
+  k8s_sa_name               = var.app_name
+  app_runner_sa_email       = local.app_runner_sa_email
+  arc_runners_namespace     = "arc-runners"
+  arc_runner_k8s_sa_name    = "arc-runner"
+  external_secrets_sa_email = local.external_secrets_sa_email
 }
 
 # ------------------------------------------------------------------------------
@@ -87,7 +90,7 @@ module "cloud_sql" {
 }
 
 # ------------------------------------------------------------------------------
-# 6. KUBERNETES: GKE Cluster (after peering so private endpoint is reachable)
+# 6. KUBERNETES: GKE Cluster (DNS endpoint; private nodes and private IP endpoint stay on)
 # ------------------------------------------------------------------------------
 module "gke" {
   source     = "../../modules/gke"
@@ -158,7 +161,8 @@ module "middleware" {
 
 # ------------------------------------------------------------------------------
 # 9. ARC: ephemeral app runners (same cluster; least-privilege WI SA)
-#     Set arc_install_charts = false until GitHub App secret versions exist.
+#     Shells and the arc-runners namespace. Leave arc_install_charts false
+#     until ExternalSecret arc-github-app is Ready.
 # ------------------------------------------------------------------------------
 module "arc" {
   count = var.enable_arc ? 1 : 0
@@ -166,12 +170,29 @@ module "arc" {
   source     = "../../modules/arc"
   depends_on = [module.gke, module.identity]
 
-  project_id              = var.project_id
-  env                     = var.env
-  app_name                = var.app_name
-  github_config_url       = var.arc_github_config_url
-  app_runner_gcp_sa_email = module.identity.app_runner_email
-  install_charts          = var.arc_install_charts
-  min_runners             = var.arc_min_runners
-  max_runners             = var.arc_max_runners
+  project_id                    = var.project_id
+  env                           = var.env
+  app_name                      = var.app_name
+  github_config_url             = var.arc_github_config_url
+  app_runner_gcp_sa_email       = module.identity.app_runner_email
+  external_secrets_gcp_sa_email = local.external_secrets_sa_email
+  install_charts                = var.arc_install_charts
+  min_runners                   = var.arc_min_runners
+  max_runners                   = var.arc_max_runners
+}
+
+# ------------------------------------------------------------------------------
+# 10. EXTERNAL SECRETS: operator plus the arc-runners identity that syncs
+#     the GitHub App shells into secret arc-github-app.
+# ------------------------------------------------------------------------------
+module "external_secrets" {
+  count = var.enable_arc ? 1 : 0
+
+  source     = "../../modules/external-secrets"
+  depends_on = [module.gke, module.arc]
+
+  project_id                = var.project_id
+  env                       = var.env
+  gcp_service_account_email = local.external_secrets_sa_email
+  arc_runners_namespace     = "arc-runners"
 }

@@ -1,9 +1,11 @@
 # modules/arc — Actions Runner Controller (scale sets) + demo NetworkPolicies
 #
 # Two-step install (see docs/arc-cutover.md):
-# 1. install_charts = false → creates Secret Manager shells only
-# 2. Operator adds secret versions (GitHub App ID / installation ID / PEM)
-# 3. install_charts = true  → namespaces, WI SA, K8s secret, Helm, NetworkPolicies
+# 1. install_charts = false → Secret Manager shells + the arc-runners namespace.
+#    External Secrets syncs those shells into Kubernetes secret arc-github-app.
+# 2. Operator adds secret versions and waits until ExternalSecret arc-github-app is Ready.
+#    Terraform must not read or own that secret: a refresh would write the PEM into state.
+# 3. install_charts = true  → arc-systems namespace, WI SA, Helm, NetworkPolicies
 
 locals {
   scale_set_name = coalesce(var.runner_scale_set_name, "${var.app_name}-arc-${var.env}")
@@ -61,26 +63,46 @@ resource "google_secret_manager_secret" "github_app_private_key" {
   }
 }
 
-data "google_secret_manager_secret_version" "github_app_id" {
-  count   = var.install_charts ? 1 : 0
-  project = var.project_id
-  secret  = google_secret_manager_secret.github_app_id.secret_id
+# Resource-level accessor on the three GitHub App shells for the External Secrets GCP account.
+resource "google_secret_manager_secret_iam_member" "github_app_id_access" {
+  secret_id = google_secret_manager_secret.github_app_id.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${var.external_secrets_gcp_sa_email}"
 }
 
-data "google_secret_manager_secret_version" "github_app_installation_id" {
-  count   = var.install_charts ? 1 : 0
-  project = var.project_id
-  secret  = google_secret_manager_secret.github_app_installation_id.secret_id
+resource "google_secret_manager_secret_iam_member" "github_app_installation_id_access" {
+  secret_id = google_secret_manager_secret.github_app_installation_id.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${var.external_secrets_gcp_sa_email}"
 }
 
-data "google_secret_manager_secret_version" "github_app_private_key" {
-  count   = var.install_charts ? 1 : 0
-  project = var.project_id
-  secret  = google_secret_manager_secret.github_app_private_key.secret_id
+resource "google_secret_manager_secret_iam_member" "github_app_private_key_access" {
+  secret_id = google_secret_manager_secret.github_app_private_key.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${var.external_secrets_gcp_sa_email}"
 }
 
 # ------------------------------------------------------------------------------
-# Namespaces / WI SA / K8s secret / Helm / NetworkPolicies (when install_charts)
+# arc-runners exists before charts so External Secrets can sync arc-github-app.
+# Helm still references that secret name; Terraform does not manage the object.
+# ------------------------------------------------------------------------------
+resource "kubernetes_namespace_v1" "arc_runners" {
+  # Not gated on install_charts: External Secrets syncs arc-github-app here
+  # before charts. count stays 1 so the [0] state address does not move.
+  count = 1
+
+  metadata {
+    name = var.arc_runners_namespace
+    labels = {
+      "app.kubernetes.io/name"      = "arc-runners"
+      "app.kubernetes.io/part-of"   = "actions-runner-controller"
+      "kubernetes.io/metadata.name" = var.arc_runners_namespace
+    }
+  }
+}
+
+# ------------------------------------------------------------------------------
+# arc-systems / WI SA / Helm / NetworkPolicies (when install_charts)
 # ------------------------------------------------------------------------------
 resource "kubernetes_namespace_v1" "arc_systems" {
   count = var.install_charts ? 1 : 0
@@ -91,19 +113,6 @@ resource "kubernetes_namespace_v1" "arc_systems" {
       "app.kubernetes.io/name"      = "arc-systems"
       "app.kubernetes.io/part-of"   = "actions-runner-controller"
       "kubernetes.io/metadata.name" = var.arc_systems_namespace
-    }
-  }
-}
-
-resource "kubernetes_namespace_v1" "arc_runners" {
-  count = var.install_charts ? 1 : 0
-
-  metadata {
-    name = var.arc_runners_namespace
-    labels = {
-      "app.kubernetes.io/name"      = "arc-runners"
-      "app.kubernetes.io/part-of"   = "actions-runner-controller"
-      "kubernetes.io/metadata.name" = var.arc_runners_namespace
     }
   }
 }
@@ -121,23 +130,6 @@ resource "kubernetes_service_account_v1" "arc_runner" {
       "app.kubernetes.io/name" = "arc-runner"
     }
   }
-}
-
-resource "kubernetes_secret_v1" "github_app" {
-  count = var.install_charts ? 1 : 0
-
-  metadata {
-    name      = local.github_config_secret_name
-    namespace = kubernetes_namespace_v1.arc_runners[0].metadata[0].name
-  }
-
-  data = {
-    github_app_id              = data.google_secret_manager_secret_version.github_app_id[0].secret_data
-    github_app_installation_id = data.google_secret_manager_secret_version.github_app_installation_id[0].secret_data
-    github_app_private_key     = data.google_secret_manager_secret_version.github_app_private_key[0].secret_data
-  }
-
-  type = "Opaque"
 }
 
 resource "helm_release" "arc_controller" {
@@ -160,6 +152,16 @@ resource "helm_release" "arc_controller" {
   ]
 
   depends_on = [kubernetes_namespace_v1.arc_systems]
+}
+
+# githubConfigSecret (arc-github-app) is synced by External Secrets, not Terraform.
+# If a previous apply owned the secret, forget it without deleting the object.
+removed {
+  from = kubernetes_secret_v1.github_app[0]
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 resource "helm_release" "arc_runners" {
@@ -209,7 +211,6 @@ resource "helm_release" "arc_runners" {
 
   depends_on = [
     helm_release.arc_controller,
-    kubernetes_secret_v1.github_app,
     kubernetes_service_account_v1.arc_runner,
   ]
 }

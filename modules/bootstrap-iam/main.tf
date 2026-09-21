@@ -1,6 +1,7 @@
 # Workload service accounts + project IAM created at bootstrap (chicken-egg).
 # Day-2 env apply consumes these emails; WI bindings stay in env (Phase 5).
-# D6: runner gets resource-level SA admin/user here — not project-level SA admin.
+# D6: runner gets resource-level WI policy admin + serviceAccountUser here —
+# not project-level SA admin, and not key minting.
 # CEL does not constrain project-level serviceAccountAdmin on terraform-sa;
 # lock = disable terraform-sa after bootstrap (scripts/lock-terraform-sa.sh).
 
@@ -18,6 +19,10 @@ locals {
     "roles/artifactregistry.writer",
     "roles/container.developer",
   ])
+
+  # Created by scripts/setup-terraform-sa.sh (terraform-sa has no roleAdmin).
+  # get / getIamPolicy / setIamPolicy only — no iam.serviceAccountKeys.create.
+  runner_wi_admin_role = "projects/${var.project_id}/roles/infraRunnerWorkloadIdentityAdmin"
 }
 
 # ------------------------------------------------------------------------------
@@ -77,20 +82,36 @@ resource "google_project_iam_member" "app_runner_roles" {
 }
 
 # ------------------------------------------------------------------------------
+# External Secrets SA — account_id: external-secrets-{env}
+# No project roles. Secret Manager access is resource-level, granted by the env apply.
+# ------------------------------------------------------------------------------
+resource "google_service_account" "external_secrets" {
+  project      = var.project_id
+  account_id   = "external-secrets-${var.env}"
+  display_name = "External Secrets SA (${var.env})"
+}
+
+# ------------------------------------------------------------------------------
 # D6: resource-level grants for the infra runner (not project-level SA admin/user)
-# - serviceAccountAdmin on app + app-runner (WI / key ops for those SAs only)
+# - infraRunnerWorkloadIdentityAdmin on app, app-runner, and external-secrets (WI policy only)
 # - serviceAccountUser on node SA (attach to GKE node pools)
-# Runner must not setIamPolicy on terraform-sa.
+# Runner must not setIamPolicy on terraform-sa, and must not mint keys.
 # ------------------------------------------------------------------------------
 resource "google_service_account_iam_member" "runner_admin_on_app_sa" {
   service_account_id = google_service_account.app_sa.name
-  role               = "roles/iam.serviceAccountAdmin"
+  role               = local.runner_wi_admin_role
   member             = "serviceAccount:${var.runner_sa_email}"
 }
 
 resource "google_service_account_iam_member" "runner_admin_on_app_runner_sa" {
   service_account_id = google_service_account.app_runner_sa.name
-  role               = "roles/iam.serviceAccountAdmin"
+  role               = local.runner_wi_admin_role
+  member             = "serviceAccount:${var.runner_sa_email}"
+}
+
+resource "google_service_account_iam_member" "runner_admin_on_external_secrets" {
+  service_account_id = google_service_account.external_secrets.name
+  role               = local.runner_wi_admin_role
   member             = "serviceAccount:${var.runner_sa_email}"
 }
 

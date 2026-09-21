@@ -127,7 +127,7 @@ variable "enable_arc" {
 
 variable "arc_install_charts" {
   type        = bool
-  description = "Install ARC Helm releases. Keep false until GitHub App secret versions exist (see docs/arc-cutover.md)."
+  description = "Install ARC Helm releases. Keep false until GitHub App secret versions exist and ExternalSecret arc-github-app in arc-runners is Ready (see docs/arc-cutover.md)."
   default     = false
 }
 

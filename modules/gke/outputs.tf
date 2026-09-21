@@ -21,6 +21,11 @@ output "cluster_endpoint" {
   value       = google_container_cluster.primary.endpoint
 }
 
+output "cluster_dns_endpoint" {
+  description = "DNS name of the control plane. Presents a Google-managed certificate; do not pair it with the cluster CA."
+  value       = google_container_cluster.primary.control_plane_endpoints_config[0].dns_endpoint_config[0].endpoint
+}
+
 output "cluster_ca_certificate" {
   description = "The public certificate that is the root of trust for the cluster."
   sensitive   = true

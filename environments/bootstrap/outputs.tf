@@ -52,3 +52,8 @@ output "app_runner_sa_email" {
   description = "ARC app-runner service account email (created by bootstrap-iam)"
   value       = module.bootstrap_iam.app_runner_sa_email
 }
+
+output "external_secrets_sa_email" {
+  description = "External Secrets service account email (created by bootstrap-iam)"
+  value       = module.bootstrap_iam.external_secrets_sa_email
+}

@@ -15,7 +15,9 @@
 
 # Project roles granted directly to terraform-sa (unconditioned).
 # Does NOT include projectIamAdmin (granted separately with CEL) or
-# project-level serviceAccountUser (escalate-via-VM; creator auto-grant is enough).
+# project-level serviceAccountUser (escalate-via-VM). Creator auto-grant of
+# iam.serviceAccounts.actAs is not enough; modules/runner binds
+# serviceAccountUser on github-infra-runner-sa only.
 TERRAFORM_SA_ROLES=(
   "roles/compute.networkAdmin"
   "roles/compute.instanceAdmin.v1"

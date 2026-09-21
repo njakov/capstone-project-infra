@@ -76,10 +76,10 @@ See [ADR 001: Runner isolation](docs/adr/001-runner-isolation.md) for locked dec
 1.  **Network (`modules/network` + `modules/network-peering`):**
     * **Infra VPC (bootstrap):** private subnet for the GCE infra runner; IAP SSH scoped to the `infra-runner` tag.
     * **App VPC (env):** private subnet + GKE secondary ranges (pods/services). Distinct CIDRs per env/project.
-    * **Peering (env):** bidirectional peering with custom-route import/export so infra runners reach the private GKE API. Verify with `gcloud compute networks peerings list` before assuming Helm can talk to the API.
+    * **Peering (env):** bidirectional peering connects the infra and app VPCs. Terraform reaches the private GKE control plane through the cluster DNS endpoint over Private Google Access, not through exported custom routes (peering is not transitive; Regular-channel control planes use Private Service Connect).
     * **Cloud NAT:** private nodes/VMs egress without public IPs.
 2.  **Compute (`modules/gke`, `modules/runner`, `modules/arc`):**
-    * **GKE:** Private cluster with VPC-native networking on the **app** VPC. Master authorized networks include the app subnet **and** the infra runner subnet. Second node pool `runners` is tainted (`github.runner=true:NoSchedule`) and labeled `workload=github-runner` for ARC only. Dev is **zonal**; prod is **regional** (two zones) — see ADR sizing table.
+    * **GKE:** Private cluster with VPC-native networking on the **app** VPC. Private nodes and the private IP endpoint stay enabled; IP endpoints stay on. Helm and the Kubernetes provider use the DNS endpoint (`allow_external_traffic`) with the runner's Google access token and omit the cluster CA. Kubernetes ServiceAccount tokens and client certificates stay disabled on that name. Master authorized networks include the app subnet **and** the infra runner subnet for the IP endpoint. Second node pool `runners` is tainted (`github.runner=true:NoSchedule`) and labeled `workload=github-runner` for ARC only. Dev is **zonal**; prod is **regional** (two zones) — see ADR sizing table.
     * **Infra GitHub Runner:** GCE VM `runner-vm-infra-{env}` on the infra VPC (`e2-medium`). Register with labels `self-hosted`, `infra`, `{env}`. Day-2 path is Terraform-only (no Docker builds required on this VM).
     * **ARC:** ephemeral app runners (`petclinic-arc-{env}`) in the same GKE cluster via `modules/arc`, using least-privilege `github-app-runner-sa-{env}` Workload Identity. Cutover steps: [docs/arc-cutover.md](docs/arc-cutover.md).
 3.  **Database (`modules/cloud-sql`):**
@@ -143,50 +143,53 @@ chmod +x scripts/bootstrap-env.sh
 ./scripts/bootstrap-env.sh <ENV-NAME>
 ```
 
-*   **What this does:** Verifies `terraform-sa` exists and is **enabled**, then runs Terraform **as that SA** (fails closed if disabled). Applies `environments/bootstrap/<env>.tfvars` (`infra_subnet_cidr` only for networking). Does **not** grant IAM.
-*   **Output:** `runner_ssh_command` and `runner_registration_labels` (`self-hosted,infra,{env}`).
-*   **Lock after success:**
-
-```bash
-./scripts/lock-terraform-sa.sh <ENV-NAME>
-```
-
+*   **What this does:** Verifies `terraform-sa` exists and is **enabled**, then runs Terraform **as that SA** (fails closed if disabled). Applies `environments/bootstrap/<env>.tfvars` (`infra_subnet_cidr` only for networking). Does **not** grant IAM. After a successful `terraform apply -auto-approve`, it runs `scripts/lock-terraform-sa.sh` for the same env. `set -e` skips that lock if apply fails. **A successful run means `terraform-sa` is disabled.**
+*   **Output:** `runner_ssh_command` and `runner_registration_labels` (`self-hosted,infra,{env}`), then the disabled SA.
 *   **Manual step:** IAP SSH to the VM, switch to user `runner`, and register the GitHub Actions runner with those labels.
-*   **Break-glass:** enable `terraform-sa` → ensure TokenCreator on your user → bootstrap/destroy → lock again. See script header comments.
+*   **Break-glass** (as in `scripts/lock-terraform-sa.sh`): enable `terraform-sa`, ensure TokenCreator on your user, re-run `./scripts/bootstrap-env.sh <ENV-NAME>`, then `./scripts/lock-terraform-sa.sh <ENV-NAME>` again. A successful bootstrap already disables the SA; run the lock script on its own when the SA was re-enabled and you are not applying.
 
 ### Step 3: Environment apply (app VPC, peering, GKE, middleware, ARC)
 
 After the infra runner is registered, apply `environments/{dev,prod}` via `infra-pipeline` (as the runner SA).
 
-1. First apply creates the **app VPC**, both peering legs, then GKE/SQL/… Prefer verifying peering ACTIVE. With `enable_arc = true` and `arc_install_charts = false`, the runner node pool and GitHub App **Secret Manager shells** are created.
-2. Populate secret versions (App ID, installation ID, private key PEM) — see [docs/arc-cutover.md](docs/arc-cutover.md).
+1. First apply creates the **app VPC**, both peering legs, then GKE/SQL/…. Helm talks to the control plane through the cluster DNS endpoint, not peering custom routes. With `enable_arc = true` and `arc_install_charts = false`, the runner node pool, GitHub App **Secret Manager shells**, the `arc-runners` namespace, and External Secrets are created.
+2. Populate secret versions (App ID, installation ID, private key PEM), then wait until `kubectl get externalsecret arc-github-app -n arc-runners` is Ready. External Secrets writes Kubernetes secret `arc-github-app`. Terraform must not own that secret — see [docs/arc-cutover.md](docs/arc-cutover.md). Database secrets are unchanged; the app still reads those through its own Workload Identity binding.
 3. Set `arc_install_charts = true` and apply again to install the controller, scale set, and NetworkPolicies.
 4. Confirm `petclinic-arc-{env}` appears under GitHub → Settings → Actions → Runners.
 
 First **prod** env apply budgets **45–90 minutes**.
 
-### Step 4: Configure GitHub Environment variables
+### Step 4: GitHub Environment protection
 
-`GCP_PROJECT_ID`, `GCP_REGION`, and `TF_STATE_BUCKET` must be **GitHub Environment** variables on Environments named `dev` and `prod` (Settings → Environments). `infra-pipeline.yml` sets `environment:` on **validate, plan, apply, and destroy** so those jobs resolve Environment-scoped `vars.*`.
+`project_id` and `region` live only in `environments/{dev,prod}/terraform.tfvars` (and the matching bootstrap tfvars). CI does not set `TF_VAR_project_id` or `TF_VAR_region`.
 
-| Variable | Example (dev) | Example (prod) |
-|----------|---------------|----------------|
-| `GCP_PROJECT_ID` | `project-62ebde90-46b7-4e70-b59` | `petclinic-gke-prod` |
-| `GCP_REGION` | `europe-west1` | `europe-west1` |
-| `TF_STATE_BUCKET` | `terraform-state-bucket-project-62ebde90-46b7-4e70-b59` | `terraform-state-bucket-petclinic-gke-prod` |
+**Fail closed before `terraform init`:** validate, plan, apply, and destroy share a checkout-time guard. The job fails when `environments/${env}/terraform.tfvars` is missing or `project_id` cannot be parsed. The state bucket is `terraform-state-bucket-${project_id}` from that file. The guard does not read `vars.GCP_PROJECT_ID`, `vars.GCP_REGION`, or `vars.TF_STATE_BUCKET`.
 
-**Delete repo-level copies** of `GCP_PROJECT_ID` / `GCP_REGION` / `TF_STATE_BUCKET` once both Environments have them. A missing Environment var silently falls back to repo vars — a prod plan can then use the **dev** project because `TF_VAR_project_id` overrides tfvars.
+**Delete leftover GitHub variables** at repository scope and on the `dev` and `prod` Environments. Those names are not the source of truth. Remove the repository copies once any Environment copies exist, then remove the Environment copies too:
 
-**Prod required reviewers:** reviewers on **apply-only** is fine. Putting `environment:` on plan/validate with required reviewers gates **every** prod plan — decide before the screenshot window.
-
-Keep authenticators as secrets (e.g. `TF_VAR_grafana_admin_password` when set). App-repo Environment vars for deploy workflows are a **separate PR** in `capstone-project-app`.
+* `GCP_PROJECT_ID`
+* `GCP_REGION`
+* `TF_STATE_BUCKET`
 
 ```bash
-# After Environment vars exist for both env names:
+# Repository scope (already removed if `gh variable list` does not show them):
 gh variable delete GCP_PROJECT_ID
 gh variable delete GCP_REGION
 gh variable delete TF_STATE_BUCKET
+
+# Environment scope:
+for env in dev prod; do
+  gh variable delete GCP_PROJECT_ID --env "$env"
+  gh variable delete GCP_REGION --env "$env"
+  gh variable delete TF_STATE_BUCKET --env "$env"
+done
 ```
+
+Keep the GitHub Environments named `dev` and `prod`. `infra-pipeline.yml` still sets `environment:` on validate, plan, apply, and destroy so deployment protection applies.
+
+**Prod required reviewers (operator step):** required reviewers cannot be set from `infra-pipeline.yml`. After the `prod` Environment exists, add them under Settings → Environments → `prod` → Deployment protection rules. Validate, plan, apply, and destroy all set `environment: prod`, so those reviewers gate every prod plan and destroy, not only apply.
+
+Keep authenticators as secrets (e.g. `TF_VAR_grafana_admin_password` when set). App-repo Environment vars for deploy workflows are a **separate PR** in `capstone-project-app`.
 
 ### Negative IAM tests (teaching demo)
 
@@ -196,7 +199,7 @@ After setup + bootstrap (with `terraform-sa` still enabled for tests 1–2):
 ./scripts/negative-iam-tests.sh <ENV-NAME>
 ```
 
-Expect `PERMISSION_DENIED` for: (1) terraform-sa binding `roles/owner`, (2) terraform-sa creating GKE/SQL, (3) runner `setIamPolicy` on terraform-sa. Confirm before running (live `gcloud` calls).
+Expect `PERMISSION_DENIED` for: (1) terraform-sa binding `roles/owner`, (2) terraform-sa creating GKE/SQL, (3) runner `setIamPolicy` on terraform-sa, (4) runner minting keys on the workload service accounts, including `external-secrets-{env}`. Confirm before running (live `gcloud` calls).
 
 ### Local `terraform validate`
 
@@ -215,10 +218,9 @@ CI also greps day-2 paths so they never reintroduce project IAM resources.
 
 When switching to a different GCP project:
 
-1. Edit committed tfvars `project_id` in `environments/bootstrap/{dev,prod}.tfvars` and `environments/{dev,prod}/terraform.tfvars`. Placeholder shapes live in the matching `*.tfvars.example` files.
-2. Set GitHub **Environment** variables `GCP_PROJECT_ID`, `GCP_REGION`, and `TF_STATE_BUCKET` for that env; delete repo-level copies once both Environments are set.
-3. Run setup/bootstrap with `PROJECT_ID` unset so scripts read tfvars, or `export PROJECT_ID=...` to override; then **lock** terraform-sa.
-4. Apply the env stack (`infra-pipeline`), then deploy the app from the app repo.
+1. Edit committed tfvars `project_id` (and `region`, if it changes) in `environments/bootstrap/{dev,prod}.tfvars` and `environments/{dev,prod}/terraform.tfvars`. Placeholder shapes live in the matching `*.tfvars.example` files. CI derives the state bucket as `terraform-state-bucket-${project_id}`.
+2. Run setup/bootstrap with `PROJECT_ID` unset so scripts read tfvars, or `export PROJECT_ID=...` to override. A successful `bootstrap-env.sh` disables `terraform-sa`.
+3. Apply the env stack (`infra-pipeline`), then deploy the app from the app repo.
 
 Operator convenience outputs after env apply: `app_sa_email`, `cloud_sql_connection_name` (CI uses deterministic names; outputs are for docs / local Helm).
 
@@ -230,9 +232,9 @@ Infra apply runs only through **`infra-pipeline.yml`** on runners labeled `self-
 ### Main Infrastructure Pipeline (`infra-pipeline.yml`)
 
 *   **Trigger:** Pushes to `main` (plans **dev**), or manual `workflow_dispatch` for `dev` / `prod` with `plan` / `apply` / `destroy`.
-*   **Protection:** Production deployments are limited to the `main` branch. Validate, plan, apply, and destroy use the GitHub Environment so `vars.GCP_*` / `TF_STATE_BUCKET` are env-scoped. Apply still requires a prior plan artifact.
+*   **Protection:** Production deployments are limited to the `main` branch. Validate, plan, apply, and destroy use the GitHub Environment for deployment protection. `project_id` and `region` come from `environments/${env}/terraform.tfvars`. Apply applies a saved `terraform plan` artifact. Destroy runs `terraform plan -destroy` in the plan job, uploads the same `tfplan-${env}` artifact, and applies that file. Required reviewers on prod are an operator setting (Step 4); this workflow cannot configure them.
 *   **Runner:** `[self-hosted, infra, dev|prod]` — must match the GCE infra runner registration labels.
-*   **Guards:** CI fails if `google_project_iam_` appears under `environments/{dev,prod}` or `modules/{gke,identity,cloud-sql}`.
+*   **Guards:** Before `terraform init`, validate, plan, apply, and destroy fail closed unless `environments/${env}/terraform.tfvars` exists and `project_id` parses. They init `terraform-state-bucket-${project_id}` from that value. CI also fails if `google_project_iam_` appears under `environments/{dev,prod}` or `modules/{gke,identity,cloud-sql}`.
 
 Application build/release/deploy workflows live in the **[capstone-project-app](https://github.com/njakov/capstone-project-app)** repository (not this repo). After ARC cutover they target scale set names such as `petclinic-arc-dev` / `petclinic-arc-prod`.
 

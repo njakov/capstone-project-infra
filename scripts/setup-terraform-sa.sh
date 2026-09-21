@@ -19,6 +19,12 @@
 #   - bucket roles/storage.objectAdmin only (not storage.admin)
 #   - TokenCreator for YOUR_USER_EMAIL on terraform-sa
 #
+# Also creates project custom role infraRunnerWorkloadIdentityAdmin
+# (iam.serviceAccounts.get, getIamPolicy, setIamPolicy only — no key minting).
+# terraform-sa has no roles/iam.roleAdmin, so this script (the human) creates
+# the role. Bootstrap binds it on the app and app-runner SAs; it is not granted
+# to terraform-sa.
+#
 # Before granting conditioned projectIamAdmin, removes any unconditioned binding
 # (--condition=None) so IAM OR does not bypass the CEL constraint.
 
@@ -43,6 +49,13 @@ echo "YOUR_USER_EMAIL=${YOUR_USER_EMAIL}"
 echo "Setting project to $PROJECT_ID..."
 gcloud config set project "$PROJECT_ID"
 
+# Workload-identity policy admin for the infra runner. Bound later by
+# modules/bootstrap-iam on the app and app-runner SAs only. No key permissions.
+WI_ADMIN_ROLE_ID="infraRunnerWorkloadIdentityAdmin"
+WI_ADMIN_ROLE_PERMISSIONS="iam.serviceAccounts.get,iam.serviceAccounts.getIamPolicy,iam.serviceAccounts.setIamPolicy"
+WI_ADMIN_ROLE_TITLE="Infra Runner Workload Identity Admin"
+WI_ADMIN_ROLE_DESCRIPTION="get, getIamPolicy, and setIamPolicy on service accounts. No key creation."
+
 echo "Enabling necessary APIs..."
 gcloud services enable iam.googleapis.com \
     iamcredentials.googleapis.com \
@@ -55,6 +68,38 @@ gcloud services enable iam.googleapis.com \
     secretmanager.googleapis.com \
     artifactregistry.googleapis.com \
     --project="${PROJECT_ID}"
+
+echo "---"
+echo "Ensuring custom role ${WI_ADMIN_ROLE_ID} (WI policy only; no key minting)..."
+
+# describe succeeds for a live or soft-deleted role and fails when it is absent.
+if role_deleted="$(gcloud iam roles describe "${WI_ADMIN_ROLE_ID}" \
+  --project="${PROJECT_ID}" \
+  --format='value(deleted)' 2>/dev/null)"; then
+  if [ "${role_deleted}" = "True" ] || [ "${role_deleted}" = "true" ]; then
+    echo "Custom role is soft-deleted; undeleting, then resetting permissions."
+    gcloud iam roles undelete "${WI_ADMIN_ROLE_ID}" \
+      --project="${PROJECT_ID}" \
+      --quiet
+  else
+    echo "Custom role already exists; resetting permissions to the WI-only set."
+  fi
+  gcloud iam roles update "${WI_ADMIN_ROLE_ID}" \
+    --project="${PROJECT_ID}" \
+    --title="${WI_ADMIN_ROLE_TITLE}" \
+    --description="${WI_ADMIN_ROLE_DESCRIPTION}" \
+    --permissions="${WI_ADMIN_ROLE_PERMISSIONS}" \
+    --stage=GA \
+    --quiet
+else
+  gcloud iam roles create "${WI_ADMIN_ROLE_ID}" \
+    --project="${PROJECT_ID}" \
+    --title="${WI_ADMIN_ROLE_TITLE}" \
+    --description="${WI_ADMIN_ROLE_DESCRIPTION}" \
+    --permissions="${WI_ADMIN_ROLE_PERMISSIONS}" \
+    --stage=GA \
+    --quiet
+fi
 
 echo "---"
 echo "Creating Service Account: $SA_NAME..."

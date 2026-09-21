@@ -32,6 +32,15 @@ resource "google_storage_bucket_iam_member" "runner_state_access" {
   member = "serviceAccount:${google_service_account.runner_sa.email}"
 }
 
+# Google no longer grants iam.serviceAccounts.actAs to the SA creator, so
+# attaching this SA to the VM 403s without an explicit binding. Resource-level
+# serviceAccountUser on the runner SA only — never project-level on terraform-sa.
+resource "google_service_account_iam_member" "terraform_sa_act_as_runner" {
+  service_account_id = google_service_account.runner_sa.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:terraform-sa@${var.project_id}.iam.gserviceaccount.com"
+}
+
 # tfsec:ignore:google-compute-no-project-wide-ssh-keys
 resource "google_compute_instance" "runner" {
   project      = var.project_id
@@ -71,4 +80,6 @@ resource "google_compute_instance" "runner" {
 
   # Register in GitHub with labels: self-hosted, infra, {env}
   tags = ["infra-runner"]
+
+  depends_on = [google_service_account_iam_member.terraform_sa_act_as_runner]
 }
