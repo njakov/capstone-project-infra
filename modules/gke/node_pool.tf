@@ -90,7 +90,9 @@ resource "google_container_node_pool" "runners" {
     disk_type    = var.disk_type
     disk_size_gb = var.runner_disk_size_gb
     tags         = var.node_tags
-    image_type   = var.runner_image_type
+    # Rootless BuildKit needs an Ubuntu kernel. The app pool stays on COS.
+    # trivy:ignore:AVD-GCP-0054
+    image_type = var.runner_image_type
 
     service_account = var.node_service_account_email
 
