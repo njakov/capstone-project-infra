@@ -75,6 +75,11 @@ resource "helm_release" "kube_prometheus_stack" {
         }
       }
       grafana = local.grafana_values
+      # GKE runs kube-dns, which does not listen on CoreDNS port 9153.
+      # The chart default ServiceMonitor stays 0/2 down, so leave it off.
+      coreDns = {
+        enabled = false
+      }
       alertmanager = {
         # Demo path: alerts visible in Prometheus / Alertmanager UI.
         # Optional external webhook (Slack/email) is out of MVP scope — see docs/monitoring.md.
