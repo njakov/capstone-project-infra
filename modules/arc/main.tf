@@ -17,10 +17,10 @@ locals {
   github_config_secret_name = "arc-github-app"
   controller_sa_name        = "arc-gha-runner-scale-set-controller"
 
-  # Wait loop for the BuildKit sidecar (UID 1000). The pod already has a
-  # Kubernetes user namespace (hostUsers: false). Do not start rootlesskit:
-  # newuidmap cannot write a nested uid_map. Start buildkitd, then buildctl.
-  # The runner writes a request file; this loop writes a docker-archive tar.
+  # Wait loop for the BuildKit sidecar. The pod already has a Kubernetes
+  # user namespace (hostUsers: false). Run buildkitd as mapped root and do
+  # not start rootlesskit. The runner writes a request file; this loop
+  # writes a docker-archive tar.
   buildkit_wait_script = <<EOT
 set -eu
 mkdir -p /buildkit-work/requests /home/user/.local/tmp /run/user/1000/buildkit
@@ -281,8 +281,8 @@ resource "helm_release" "arc_runners" {
             {
               name = "buildkit"
               # v0.33.0-rootless multi-arch index, resolved 2026-09-22.
-              # UID 1000, no privileged flag, no Docker socket. The sidecar
-              # starts buildkitd itself; rootlesskit is not used.
+              # Mapped root in the pod user namespace, no privileged flag,
+              # no Docker socket. The sidecar starts buildkitd itself.
               image = "moby/buildkit@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef"
               command = [
                 "/bin/sh",
@@ -300,7 +300,7 @@ resource "helm_release" "arc_runners" {
                 },
                 {
                   name  = "USER"
-                  value = "user"
+                  value = "root"
                 },
                 {
                   name  = "XDG_RUNTIME_DIR"
@@ -308,8 +308,10 @@ resource "helm_release" "arc_runners" {
                 }
               ]
               securityContext = {
-                runAsUser                = 1000
-                runAsGroup               = 1000
+                # Mapped root inside hostUsers:false. The rootless buildkitd
+                # binary refuses to start as UID 1000 ("requires mapped root").
+                runAsUser                = 0
+                runAsGroup               = 0
                 allowPrivilegeEscalation = true
                 privileged               = false
                 procMount                = "Unmasked"
