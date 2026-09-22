@@ -105,7 +105,8 @@ Infra ↔ app VPC peering (env-owned) still connects the two VPCs. Control-plane
 - App VPC + peering move to env state. Applying slim bootstrap onto old state that still owns `module.app_network` **deletes the app VPC** — destroy env then bootstrap before migrating.
 - Infra workflows must use `runs-on: [self-hosted, infra, {env}]`. `project_id` and `region` come from `environments/{env}/terraform.tfvars`. The shared checkout guard fails before `terraform init` when that file is missing or `project_id` cannot be parsed, and the state bucket is `terraform-state-bucket-${project_id}`. CI does not read `GCP_PROJECT_ID`, `GCP_REGION`, or `TF_STATE_BUCKET` from GitHub. Delete those variables at repository scope after any Environment copies exist, then delete the `dev` and `prod` Environment copies. The GitHub Environment on validate, plan, apply, and destroy is for deployment protection. Required reviewers cannot be set from the workflow; add them on the `prod` Environment (operator step). They gate every prod job, including plan and destroy.
 - App workflows use ARC scale set names (`petclinic-arc-dev` / `petclinic-arc-prod`) and build images with **rootless BuildKit** (no DinD). The runner node pool image is `UBUNTU_CONTAINERD`. The app pool stays `COS_CONTAINERD`.
-- The BuildKit sidecar writes a docker-archive tarball to a shared emptyDir. It runs as UID 0 inside `hostUsers: false` (mapped root, not host root) because the rootless `buildkitd` binary refuses UID 1000. The runner container stays UID 0 so `run-helper.sh` can start (`RUNNER_ALLOW_RUNASROOT`). Neither container is privileged and neither mounts a Docker socket. The sidecar starts `buildkitd` directly; rootlesskit is not used.
+- The BuildKit sidecar matches official [`job.rootless.yaml`](https://github.com/moby/buildkit/blob/master/examples/kubernetes/job.rootless.yaml): image `moby/buildkit:v0.33.0-rootless` (digest-pinned), `runAsUser/runAsGroup: 1000`, Unconfined seccomp and AppArmor, `BUILDKITD_FLAGS=--oci-worker-no-process-sandbox`, emptyDir at `/home/user/.local/share/buildkit`. No `hostUsers`, no `privileged`, no extra capabilities. The sidecar is long-lived, so an ARC request-file loop calls official `buildctl-daemonless.sh` (which starts RootlessKit + `buildkitd`) and writes a docker-archive tarball. The runner stays UID 0 so `run-helper.sh` can start (`RUNNER_ALLOW_RUNASROOT`). Neither container mounts a Docker socket. Crane on the runner pushes after Trivy; the sidecar never receives `DOCKER_CONFIG`.
+- Cluster evidence (dev, 2026-09-22): GKE `v1.35.8-gke.1036000`, runner node Ubuntu 24.04.4 / kernel `6.8.0-1061-gke` / containerd 2.1.9, `max_user_namespaces=2147483647`, `apparmor_restrict_unprivileged_userns=1`. Official Job `buildkit-rootless-spike` completed on that pool. The previous hybrid (`hostUsers: false` + start `buildkitd` as UID 1000 without RootlessKit) failed with `rootless mode requires to be executed as the mapped root`.
 - Compromised ARC with deploy rights can still change Deployments **in that cluster**; this is accepted for the demo.
 - Docker on the GCE infra VM (if present) uses the `docker` group (`runner` user) — never world-writable socket (`chmod 666`). Day-2 infra path is Terraform-only on `e2-medium`.
 - App CI trusts GKE Workload Identity on ARC pods (not GitHub→GCP OIDC / `id-token`).
@@ -121,7 +122,7 @@ Infra ↔ app VPC peering (env-owned) still connects the two VPCs. Control-plane
 - HTTP-only Ingress (source-restricted LoadBalancer; no cert-manager in MVP)
 - Manual GCE runner registration via IAP SSH
 - No GitHub→GCP OIDC for Terraform yet (trust stays on GCE SA / ARC WI)
-- ARC runner container stays `runAsUser: 0` for the runner toolchain. The BuildKit sidecar is UID 1000 with `procMount: Unmasked`, `SYS_ADMIN`, and Unconfined seccomp/AppArmor (privilege reduction vs DinD, not a second security domain)
+- ARC runner container stays `runAsUser: 0` for the runner toolchain. The BuildKit sidecar is official rootless (UID 1000, Unconfined seccomp/AppArmor, `--oci-worker-no-process-sandbox`). That flag is discouraged by BuildKit but is the documented Kubernetes workaround. Privilege reduction vs DinD, not a second security domain. On this GKE Ubuntu 24.04 image, Unconfined AppArmor was enough even with `apparmor_restrict_unprivileged_userns=1`.
 - Prod regional control-plane charge from create until delete; short screenshot window
 
 ## Non-goals
@@ -156,7 +157,9 @@ Infra ↔ app VPC peering (env-owned) still connects the two VPCs. Control-plane
 
 - [GitHub: Self-hosted runners — prefer ephemeral](https://docs.github.com/en/actions/reference/runners/self-hosted-runners)
 - [GitHub: Actions Runner Controller concepts](https://docs.github.com/en/actions/concepts/runners/actions-runner-controller)
-- [GitHub: Deploying runner scale sets](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets)
+- [GitHub: Deploying runner scale sets](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets) (custom `template`; official `dind` / `dind-rootless` still require `privileged: true`)
+- [BuildKit rootless.md](https://github.com/moby/buildkit/blob/master/docs/rootless.md)
+- [BuildKit Kubernetes examples](https://github.com/moby/buildkit/blob/master/examples/kubernetes/README.md) and [job.rootless.yaml](https://github.com/moby/buildkit/blob/master/examples/kubernetes/job.rootless.yaml)
 - [GoogleCloudPlatform/arcgke](https://github.com/GoogleCloudPlatform/arcgke)
 - [GCP Community: GKE runner sets + Workload Identity](https://medium.com/google-cloud/streamline-ci-cd-secure-gcp-deployments-with-gke-runner-sets-github-actions-workload-identity-fe851c6e2d60)
 

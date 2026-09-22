@@ -17,23 +17,18 @@ locals {
   github_config_secret_name = "arc-github-app"
   controller_sa_name        = "arc-gha-runner-scale-set-controller"
 
-  # Wait loop for the BuildKit sidecar. The pod already has a Kubernetes
-  # user namespace (hostUsers: false). Run buildkitd as mapped root and do
-  # not start rootlesskit. The runner writes a request file; this loop
-  # writes a docker-archive tar.
+  # ARC sidecar adapter around official job.rootless.yaml.
+  # The scale-set sidecar is long-lived, so it cannot be the Job command
+  # itself. Each request runs the same official client:
+  #   buildctl-daemonless.sh build --frontend dockerfile.v0 ...
+  # which starts rootlesskit + buildkitd (image ENTRYPOINT), then buildctl.
+  # Output stays type=docker tar; crane on the runner pushes after Trivy.
+  # Spike: Job buildkit-rootless-spike in buildkit-spike completed 2026-09-22
+  # on gke-petclinic-gke-dev-runners (Ubuntu 24.04.4, kernel 6.8.0-1061-gke)
+  # with apparmor_restrict_unprivileged_userns=1.
   buildkit_wait_script = <<EOT
 set -eu
 mkdir -p /buildkit-work/requests /home/user/.local/tmp /run/user/1000/buildkit
-buildkitd --oci-worker-no-process-sandbox --addr unix:///run/user/1000/buildkit/buildkitd.sock > /buildkit-work/buildkitd.log 2>&1 &
-i=0
-while [ ! -S /run/user/1000/buildkit/buildkitd.sock ]; do
-  i=$((i + 1))
-  if [ "$i" -ge 30 ]; then
-    cat /buildkit-work/buildkitd.log >&2 || true
-    exit 1
-  fi
-  sleep 1
-done
 while true; do
   if [ -f /buildkit-work/requests/build.req ]; then
     CONTEXT=$(sed -n 's/^CONTEXT=//p' /buildkit-work/requests/build.req)
@@ -44,7 +39,7 @@ while true; do
     DOCKERFILE_DIR=$(dirname "$DOCKERFILE")
     DOCKERFILE_NAME=$(basename "$DOCKERFILE")
     set +e
-    buildctl --addr unix:///run/user/1000/buildkit/buildkitd.sock build --frontend dockerfile.v0 --local context="$CONTEXT" --local dockerfile="$DOCKERFILE_DIR" --opt filename="$DOCKERFILE_NAME" --output type=docker,dest="$TAR_PATH",name="$IMAGE_NAME" > /buildkit-work/build.log 2>&1
+    buildctl-daemonless.sh build --frontend dockerfile.v0 --local context="$CONTEXT" --local dockerfile="$DOCKERFILE_DIR" --opt filename="$DOCKERFILE_NAME" --output type=docker,dest="$TAR_PATH",name="$IMAGE_NAME" > /buildkit-work/build.log 2>&1
     echo $? > /buildkit-work/requests/build.exit.tmp
     mv /buildkit-work/requests/build.exit.tmp /buildkit-work/requests/build.exit
     set -e
@@ -234,22 +229,20 @@ resource "helm_release" "arc_runners" {
           serviceAccountName = var.runner_k8s_sa_name
           nodeSelector       = var.runner_node_selector
           tolerations        = var.runner_tolerations
-          # Required for BuildKit procMount: Unmasked. The API rejects Unmasked
-          # unless the pod itself runs in a user namespace.
-          hostUsers = false
-          # Default container mode (chart 0.10.1): a container not named "runner"
-          # is emitted as written, and volumes pass through. Do not set
-          # containerMode dind or kubernetes; those use different volume helpers.
+          # Official job.rootless.yaml: no hostUsers, no privileged, no
+          # extra capabilities. RootlessKit creates the user namespace.
+          # Default container mode (chart 0.10.1): a container not named
+          # "runner" is emitted as written. Do not set containerMode dind.
           # Runner stays UID 0 because run-helper.sh exits without
-          # RUNNER_ALLOW_RUNASROOT. BuildKit runs as UID 1000 in its own container.
+          # RUNNER_ALLOW_RUNASROOT.
           volumes = [
             {
               name     = "buildkit-work"
               emptyDir = {}
             },
             {
-              # Explicit emptyDir: the image VOLUME is mounted nosuid,nodev and
-              # rootless BuildKit cannot use it.
+              # Official rootless.md / job.rootless.yaml: image VOLUME is
+              # nosuid,nodev and cannot hold the rootless state directory.
               name     = "buildkit-state"
               emptyDir = {}
             }
@@ -281,8 +274,7 @@ resource "helm_release" "arc_runners" {
             {
               name = "buildkit"
               # v0.33.0-rootless multi-arch index, resolved 2026-09-22.
-              # Mapped root in the pod user namespace, no privileged flag,
-              # no Docker socket. The sidecar starts buildkitd itself.
+              # Official job.rootless.yaml securityContext and client.
               image = "moby/buildkit@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef"
               command = [
                 "/bin/sh",
@@ -300,7 +292,7 @@ resource "helm_release" "arc_runners" {
                 },
                 {
                   name  = "USER"
-                  value = "root"
+                  value = "user"
                 },
                 {
                   name  = "XDG_RUNTIME_DIR"
@@ -308,30 +300,16 @@ resource "helm_release" "arc_runners" {
                 }
               ]
               securityContext = {
-                # Mapped root inside hostUsers:false. The rootless buildkitd
-                # binary refuses to start as UID 1000 ("requires mapped root").
-                runAsUser                = 0
-                runAsGroup               = 0
-                allowPrivilegeEscalation = true
-                privileged               = false
-                procMount                = "Unmasked"
+                # To change UID/GID, rebuild the image (official comment).
+                runAsUser  = 1000
+                runAsGroup = 1000
+                # Kubernetes >= 1.19
                 seccompProfile = {
                   type = "Unconfined"
                 }
+                # Kubernetes >= 1.30
                 appArmorProfile = {
                   type = "Unconfined"
-                }
-                capabilities = {
-                  add = [
-                    "SYS_ADMIN",
-                    "CHOWN",
-                    "DAC_OVERRIDE",
-                    "FOWNER",
-                    "FSETID",
-                    "SETGID",
-                    "SETUID",
-                    "SETFCAP",
-                  ]
                 }
               }
               volumeMounts = [
