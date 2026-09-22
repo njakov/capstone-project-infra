@@ -136,7 +136,7 @@ Plan + apply again. Expect:
 | Scale set online | GitHub Actions runners UI → `petclinic-arc-dev` |
 | Scheduling | `kubectl get pods -n arc-runners -o wide` — nodes should be from the `runners` pool |
 | NetworkPolicy smoke | From an ARC pod: HTTPS to GitHub/AR works; curl to PetClinic ClusterIP **fails** |
-| Kaniko spike | App repo Plan 2 — PR/main workflows build with Kaniko on `petclinic-arc-{env}` |
+| BuildKit build | App repo workflows build with rootless BuildKit on `petclinic-arc-{env}` |
 
 **Rollback:** keep any old app-capable GCE runner registration until the first green ARC job; do not delete it in this step. App workflow `runs-on` flips belong to Plan 2.
 

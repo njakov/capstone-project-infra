@@ -126,8 +126,9 @@ module "gke" {
   master_ipv4_cidr_block = var.master_ipv4_cidr_block
   deletion_protection    = var.deletion_protection
 
-  # Dedicated tainted pool for ARC ephemeral runners (Kaniko-friendly COS)
+  # Dedicated tainted pool for ARC ephemeral runners (Ubuntu for rootless BuildKit)
   enable_runner_node_pool = true
+  runner_image_type       = "UBUNTU_CONTAINERD"
   runner_machine_type     = var.gke_runner_machine_type
   runner_min_node_count   = var.gke_runner_min_nodes
   runner_max_node_count   = var.gke_runner_max_nodes

@@ -244,9 +244,10 @@ Application build/release/deploy workflows live in the **[capstone-project-app](
 
 | Workflow | Trigger | Description |
 | :--- | :--- | :--- |
-| **PR Release** (`pr-release.yml`) | Pull Request | Unit tests, static analysis, Trivy; builds to the **dev** registry. |
-| **Main Release** (`main-release.yml`) | Push to `main` | SemVer tag after tests/scan, image push to the **prod** registry. |
-| **Manual Deploy** (`manual-deploy.yml`) | Manual Dispatch | Helm deploy of a chosen version to the target environment. |
+| **PR Release** (`pr-release.yml`) | Pull Request | Unit tests, static analysis, Trivy; builds to the **dev** registry. No deploy. |
+| **Deploy to dev** (`deploy-dev.yml`) | Push to `main` | Rebuild, scan, push to the **dev** registry, Helm upgrade the shared dev cluster. |
+| **Main Release** (`main-release.yml`) | Push to `main` | SemVer tag after tests/scan, image push to the **prod** registry. No deploy. |
+| **Manual Deploy** (`manual-deploy.yml`) | Manual Dispatch | Helm deploy of a chosen version (prod promote, or a chosen tag to either env). |
 
 ## Tools & Technologies Used
 
@@ -254,7 +255,7 @@ Application build/release/deploy workflows live in the **[capstone-project-app](
 | :--- | :--- | :--- |
 | **IaC** | Terraform | Infrastructure provisioning (v1.16.x). |
 | **State** | GCS | Remote backend with versioning enabled. |
-| **Container** | Docker / Kaniko | Packaging; ARC builds prefer Kaniko (non-privileged). |
+| **Container** | Docker / BuildKit | Packaging; ARC builds use rootless BuildKit on Ubuntu runner nodes. |
 | **Orchestration** | Kubernetes (GKE) | Container management with VPC-native networking. |
 | **Charts** | Helm | Deploying Nginx Ingress and Prometheus stack. |
 | **Security** | Trivy / TFLint | Static analysis for Terraform code. |

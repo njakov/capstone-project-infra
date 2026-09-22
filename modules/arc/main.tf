@@ -16,6 +16,37 @@ locals {
 
   github_config_secret_name = "arc-github-app"
   controller_sa_name        = "arc-gha-runner-scale-set-controller"
+
+  # Wait loop for the rootless BuildKit sidecar (UID 1000). The runner writes
+  # a request file on the shared emptyDir; this loop runs buildctl-daemonless
+  # and leaves a docker-archive tarball for Trivy and crane. No registry push.
+  buildkit_wait_script = <<EOT
+set -eu
+mkdir -p /buildkit-work/requests /home/user/.local/tmp /run/user/1000
+while true; do
+  if [ -f /buildkit-work/requests/build.req ]; then
+    CONTEXT=$(sed -n 's/^CONTEXT=//p' /buildkit-work/requests/build.req)
+    DOCKERFILE=$(sed -n 's/^DOCKERFILE=//p' /buildkit-work/requests/build.req)
+    TAR_PATH=$(sed -n 's/^TAR_PATH=//p' /buildkit-work/requests/build.req)
+    IMAGE_NAME=$(sed -n 's/^DESTINATION=//p' /buildkit-work/requests/build.req)
+    rm -f /buildkit-work/requests/build.req /buildkit-work/requests/build.exit
+    DOCKERFILE_DIR=$(dirname "$DOCKERFILE")
+    DOCKERFILE_NAME=$(basename "$DOCKERFILE")
+    set +e
+    /usr/bin/buildctl-daemonless.sh build \
+      --frontend dockerfile.v0 \
+      --local context="$CONTEXT" \
+      --local dockerfile="$DOCKERFILE_DIR" \
+      --opt filename="$DOCKERFILE_NAME" \
+      --output type=docker,dest="$TAR_PATH",name="$IMAGE_NAME" \
+      > /buildkit-work/build.log 2>&1
+    echo $? > /buildkit-work/requests/build.exit.tmp
+    mv /buildkit-work/requests/build.exit.tmp /buildkit-work/requests/build.exit
+    set -e
+  fi
+  sleep 1
+done
+EOT
 }
 
 # ------------------------------------------------------------------------------
@@ -192,8 +223,23 @@ resource "helm_release" "arc_runners" {
           serviceAccountName = var.runner_k8s_sa_name
           nodeSelector       = var.runner_node_selector
           tolerations        = var.runner_tolerations
-          # runAsUser 0: Kaniko executor (app CI) must unpack layers under /kaniko.
-          # Prefer this over privileged DinD; still not a hard security domain (see ADR).
+          # Default container mode (chart 0.10.1): a container not named "runner"
+          # is emitted as written, and volumes pass through. Do not set
+          # containerMode dind or kubernetes; those use different volume helpers.
+          # Runner stays UID 0 because run-helper.sh exits without
+          # RUNNER_ALLOW_RUNASROOT. BuildKit runs as UID 1000 in its own container.
+          volumes = [
+            {
+              name     = "buildkit-work"
+              emptyDir = {}
+            },
+            {
+              # Explicit emptyDir: the image VOLUME is mounted nosuid,nodev and
+              # rootless BuildKit cannot use it.
+              name     = "buildkit-state"
+              emptyDir = {}
+            }
+          ]
           containers = [
             {
               name = "runner"
@@ -211,6 +257,62 @@ resource "helm_release" "arc_runners" {
               securityContext = {
                 runAsUser = 0
               }
+              volumeMounts = [
+                {
+                  name      = "buildkit-work"
+                  mountPath = "/buildkit-work"
+                }
+              ]
+            },
+            {
+              name = "buildkit"
+              # v0.33.0-rootless multi-arch index, resolved 2026-09-22.
+              # Upstream rootless pod: UID 1000, seccomp and AppArmor Unconfined,
+              # and --oci-worker-no-process-sandbox. Not privileged, no Docker socket.
+              image = "moby/buildkit@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef"
+              command = [
+                "/bin/sh",
+                "-c",
+                local.buildkit_wait_script,
+              ]
+              env = [
+                {
+                  name  = "BUILDKITD_FLAGS"
+                  value = "--oci-worker-no-process-sandbox"
+                },
+                {
+                  name  = "HOME"
+                  value = "/home/user"
+                },
+                {
+                  name  = "USER"
+                  value = "user"
+                },
+                {
+                  name  = "XDG_RUNTIME_DIR"
+                  value = "/run/user/1000"
+                }
+              ]
+              securityContext = {
+                runAsUser  = 1000
+                runAsGroup = 1000
+                seccompProfile = {
+                  type = "Unconfined"
+                }
+                appArmorProfile = {
+                  type = "Unconfined"
+                }
+              }
+              volumeMounts = [
+                {
+                  name      = "buildkit-work"
+                  mountPath = "/buildkit-work"
+                },
+                {
+                  name      = "buildkit-state"
+                  mountPath = "/home/user/.local/share/buildkit"
+                }
+              ]
             }
           ]
         }

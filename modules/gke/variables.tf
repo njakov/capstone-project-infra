@@ -181,7 +181,7 @@ variable "runner_node_pool_name" {
 
 variable "runner_machine_type" {
   type        = string
-  description = "Machine type for ARC runner nodes (Kaniko builds need more CPU/memory than app nodes)."
+  description = "Machine type for ARC runner nodes (image builds need more CPU/memory than app nodes)."
   default     = "e2-standard-4"
 }
 
@@ -205,8 +205,8 @@ variable "runner_disk_size_gb" {
 
 variable "runner_image_type" {
   type        = string
-  description = "Image type for runner nodes. COS_CONTAINERD is preferred for non-privileged Kaniko builds."
-  default     = "COS_CONTAINERD"
+  description = "Image type for ARC runner nodes. UBUNTU_CONTAINERD is required for rootless BuildKit. The app pool stays on image_type (COS_CONTAINERD)."
+  default     = "UBUNTU_CONTAINERD"
 }
 
 variable "deletion_protection" {
