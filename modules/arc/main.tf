@@ -213,6 +213,12 @@ resource "helm_release" "arc_runners" {
       }
 
       template = {
+        metadata = {
+          annotations = {
+            # Ubuntu 24.04 AppArmor still confines the container without this.
+            "container.apparmor.security.beta.kubernetes.io/buildkit" = "unconfined"
+          }
+        }
         spec = {
           serviceAccountName = var.runner_k8s_sa_name
           nodeSelector       = var.runner_node_selector
@@ -261,8 +267,9 @@ resource "helm_release" "arc_runners" {
             {
               name = "buildkit"
               # v0.33.0-rootless multi-arch index, resolved 2026-09-22.
-              # Upstream rootless pod: UID 1000, seccomp and AppArmor Unconfined,
-              # and --oci-worker-no-process-sandbox. Not privileged, no Docker socket.
+              # UID 1000, no privileged flag, no Docker socket. Ubuntu 24.04
+              # blocks remount of / unless /proc is unmasked and SYS_ADMIN can
+              # create the user namespace.
               image = "moby/buildkit@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef"
               command = [
                 "/bin/sh",
@@ -288,13 +295,28 @@ resource "helm_release" "arc_runners" {
                 }
               ]
               securityContext = {
-                runAsUser  = 1000
-                runAsGroup = 1000
+                runAsUser                = 1000
+                runAsGroup               = 1000
+                allowPrivilegeEscalation = true
+                privileged               = false
+                procMount                = "Unmasked"
                 seccompProfile = {
                   type = "Unconfined"
                 }
                 appArmorProfile = {
                   type = "Unconfined"
+                }
+                capabilities = {
+                  add = [
+                    "SYS_ADMIN",
+                    "CHOWN",
+                    "DAC_OVERRIDE",
+                    "FOWNER",
+                    "FSETID",
+                    "SETGID",
+                    "SETUID",
+                    "SETFCAP",
+                  ]
                 }
               }
               volumeMounts = [
