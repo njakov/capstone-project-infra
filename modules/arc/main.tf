@@ -33,13 +33,7 @@ while true; do
     DOCKERFILE_DIR=$(dirname "$DOCKERFILE")
     DOCKERFILE_NAME=$(basename "$DOCKERFILE")
     set +e
-    /usr/bin/buildctl-daemonless.sh build \
-      --frontend dockerfile.v0 \
-      --local context="$CONTEXT" \
-      --local dockerfile="$DOCKERFILE_DIR" \
-      --opt filename="$DOCKERFILE_NAME" \
-      --output type=docker,dest="$TAR_PATH",name="$IMAGE_NAME" \
-      > /buildkit-work/build.log 2>&1
+    /usr/bin/buildctl-daemonless.sh build --frontend dockerfile.v0 --local context="$CONTEXT" --local dockerfile="$DOCKERFILE_DIR" --opt filename="$DOCKERFILE_NAME" --output type=docker,dest="$TAR_PATH",name="$IMAGE_NAME" > /buildkit-work/build.log 2>&1
     echo $? > /buildkit-work/requests/build.exit.tmp
     mv /buildkit-work/requests/build.exit.tmp /buildkit-work/requests/build.exit
     set -e
