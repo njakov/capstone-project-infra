@@ -17,12 +17,23 @@ locals {
   github_config_secret_name = "arc-github-app"
   controller_sa_name        = "arc-gha-runner-scale-set-controller"
 
-  # Wait loop for the rootless BuildKit sidecar (UID 1000). The runner writes
-  # a request file on the shared emptyDir; this loop runs buildctl-daemonless
-  # and leaves a docker-archive tarball for Trivy and crane. No registry push.
+  # Wait loop for the BuildKit sidecar (UID 1000). The pod already has a
+  # Kubernetes user namespace (hostUsers: false). Do not start rootlesskit:
+  # newuidmap cannot write a nested uid_map. Start buildkitd, then buildctl.
+  # The runner writes a request file; this loop writes a docker-archive tar.
   buildkit_wait_script = <<EOT
 set -eu
-mkdir -p /buildkit-work/requests /home/user/.local/tmp /run/user/1000
+mkdir -p /buildkit-work/requests /home/user/.local/tmp /run/user/1000/buildkit
+buildkitd --oci-worker-no-process-sandbox --addr unix:///run/user/1000/buildkit/buildkitd.sock > /buildkit-work/buildkitd.log 2>&1 &
+i=0
+while [ ! -S /run/user/1000/buildkit/buildkitd.sock ]; do
+  i=$((i + 1))
+  if [ "$i" -ge 30 ]; then
+    cat /buildkit-work/buildkitd.log >&2 || true
+    exit 1
+  fi
+  sleep 1
+done
 while true; do
   if [ -f /buildkit-work/requests/build.req ]; then
     CONTEXT=$(sed -n 's/^CONTEXT=//p' /buildkit-work/requests/build.req)
@@ -33,7 +44,7 @@ while true; do
     DOCKERFILE_DIR=$(dirname "$DOCKERFILE")
     DOCKERFILE_NAME=$(basename "$DOCKERFILE")
     set +e
-    /usr/bin/buildctl-daemonless.sh build --frontend dockerfile.v0 --local context="$CONTEXT" --local dockerfile="$DOCKERFILE_DIR" --opt filename="$DOCKERFILE_NAME" --output type=docker,dest="$TAR_PATH",name="$IMAGE_NAME" > /buildkit-work/build.log 2>&1
+    buildctl --addr unix:///run/user/1000/buildkit/buildkitd.sock build --frontend dockerfile.v0 --local context="$CONTEXT" --local dockerfile="$DOCKERFILE_DIR" --opt filename="$DOCKERFILE_NAME" --output type=docker,dest="$TAR_PATH",name="$IMAGE_NAME" > /buildkit-work/build.log 2>&1
     echo $? > /buildkit-work/requests/build.exit.tmp
     mv /buildkit-work/requests/build.exit.tmp /buildkit-work/requests/build.exit
     set -e
@@ -270,9 +281,8 @@ resource "helm_release" "arc_runners" {
             {
               name = "buildkit"
               # v0.33.0-rootless multi-arch index, resolved 2026-09-22.
-              # UID 1000, no privileged flag, no Docker socket. Ubuntu 24.04
-              # blocks remount of / unless /proc is unmasked and SYS_ADMIN can
-              # create the user namespace.
+              # UID 1000, no privileged flag, no Docker socket. The sidecar
+              # starts buildkitd itself; rootlesskit is not used.
               image = "moby/buildkit@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef"
               command = [
                 "/bin/sh",
