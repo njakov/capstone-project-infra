@@ -223,6 +223,9 @@ resource "helm_release" "arc_runners" {
           serviceAccountName = var.runner_k8s_sa_name
           nodeSelector       = var.runner_node_selector
           tolerations        = var.runner_tolerations
+          # Required for BuildKit procMount: Unmasked. The API rejects Unmasked
+          # unless the pod itself runs in a user namespace.
+          hostUsers = false
           # Default container mode (chart 0.10.1): a container not named "runner"
           # is emitted as written, and volumes pass through. Do not set
           # containerMode dind or kubernetes; those use different volume helpers.
