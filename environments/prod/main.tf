@@ -111,13 +111,6 @@ module "gke" {
 
   subnet_ip_cidr_range = module.app_network.subnet_ip_cidr_range
 
-  additional_master_authorized_networks = [
-    {
-      display_name = "infra-runner-subnet"
-      cidr_block   = data.google_compute_subnetwork.infra_subnet.ip_cidr_range
-    }
-  ]
-
   min_node_count         = var.gke_min_nodes
   max_node_count         = var.gke_max_nodes
   machine_type           = var.gke_machine_type

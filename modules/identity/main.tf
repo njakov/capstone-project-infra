@@ -41,7 +41,11 @@ resource "kubernetes_namespace_v1" "petclinic" {
   metadata {
     name = var.k8s_namespace
     labels = {
-      "app.kubernetes.io/name" = var.k8s_namespace
+      "app.kubernetes.io/name"                     = var.k8s_namespace
+      "pod-security.kubernetes.io/enforce"         = "baseline"
+      "pod-security.kubernetes.io/enforce-version" = "latest"
+      "pod-security.kubernetes.io/audit"           = "restricted"
+      "pod-security.kubernetes.io/warn"            = "restricted"
     }
   }
 }

@@ -10,6 +10,11 @@ locals {
   ]
 }
 
+# Dataplane V2 enforces NetworkPolicy. Kubernetes PodSecurityPolicy was removed
+# in 1.25; GKE rejects pod_security_policy_config. Workload namespaces use Pod
+# Security Admission labels instead (see modules/identity petclinic namespace).
+#trivy:ignore:AVD-GCP-0047
+#trivy:ignore:AVD-GCP-0056
 resource "google_container_cluster" "primary" {
   project             = var.project_id
   name                = var.cluster_name
@@ -45,18 +50,12 @@ resource "google_container_cluster" "primary" {
     }
   }
 
+  # IP endpoint only. The infra runner subnet is not listed: peering does not
+  # advertise the master CIDR, so that entry never opened a path.
   master_authorized_networks_config {
     cidr_blocks {
       display_name = "app-private-subnet"
       cidr_block   = var.subnet_ip_cidr_range
-    }
-
-    dynamic "cidr_blocks" {
-      for_each = var.additional_master_authorized_networks
-      content {
-        display_name = cidr_blocks.value.display_name
-        cidr_block   = cidr_blocks.value.cidr_block
-      }
     }
   }
 

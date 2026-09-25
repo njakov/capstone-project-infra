@@ -80,15 +80,6 @@ variable "subnet_ip_cidr_range" {
   description = "The primary IP range of the app subnet (for master authorized networks)."
 }
 
-variable "additional_master_authorized_networks" {
-  type = list(object({
-    cidr_block   = string
-    display_name = string
-  }))
-  description = "Extra CIDRs allowed to reach the private GKE control plane (e.g. infra runner subnet)."
-  default     = []
-}
-
 variable "node_pool_name" {
   type        = string
   description = "The name of the node pool."
