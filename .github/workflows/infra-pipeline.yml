@@ -45,7 +45,7 @@ concurrency:
 jobs:
   setup:
     name: Setup Context
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       runner_label: ${{ steps.set-context.outputs.runner_label }}
       work_dir: ${{ steps.set-context.outputs.work_dir }}
@@ -57,16 +57,20 @@ jobs:
         env:
           INPUT_ENV: ${{ inputs.environment }}
           INPUT_REF: ${{ inputs.ref }}
-          GITHUB_REF: ${{ github.ref }}
+          INPUT_ACTION: ${{ inputs.action }}
+          GITHUB_SHA: ${{ github.sha }}
           EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # 1. Determine Environment & Ref
+          # 1. Determine Environment and the ref to resolve once for this run.
+          # Push is already a commit. Dispatch uses the optional input, else the
+          # commit of the workflow file selected in the UI.
           if [ "$EVENT_NAME" = "push" ]; then
             ENV="dev"
-            REF="${GITHUB_REF#refs/heads/}"
+            RAW_REF="${GITHUB_SHA}"
           else
             ENV="${INPUT_ENV:-dev}"
-            REF="${INPUT_REF:-${GITHUB_REF#refs/heads/}}"
+            RAW_REF="${INPUT_REF:-${GITHUB_SHA}}"
           fi
 
           case "$ENV" in
@@ -79,22 +83,66 @@ jobs:
 
           # A newline in ref would add extra $GITHUB_OUTPUT lines and overwrite
           # environment, work_dir, or runner_label. EOF is the output delimiter.
-          case "$REF" in
+          case "$RAW_REF" in
             ""|EOF|*$'\n'*|*$'\r'*)
               echo "::error::Invalid ref."
               exit 1
               ;;
           esac
 
-          # 2. Safety Guard: Block Prod deployments from non-main branches
-          if [ "$ENV" = "prod" ] && [ "$REF" != "main" ]; then
-            echo "::error title=Deployment Denied::Production deployments are strictly limited to the 'main' branch. You tried: $REF"
+          # 2. Pin every later job to this SHA. Branch and tag names are
+          # resolved once here so a moving ref cannot change between jobs.
+          encoded_ref="$(jq -rn --arg r "${RAW_REF}" '$r|@uri')"
+          SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
+          if ! printf '%s' "${SHA}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::Could not resolve ref to a commit SHA."
             exit 1
           fi
 
-          # 3. Output Variables
+          # 3. Prod SHA gate. Plan may use the tip of main (identical) or an
+          # ancestor (behind). Apply and destroy must be the current tip of
+          # main (identical only). Dev may pin any resolved SHA.
+          if [ "$ENV" = "prod" ]; then
+            compare_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${SHA}" --jq .status)"
+            if [ "$EVENT_NAME" = "workflow_dispatch" ] && { [ "$INPUT_ACTION" = "apply" ] || [ "$INPUT_ACTION" = "destroy" ]; }; then
+              case "$compare_status" in
+                identical) ;;
+                *)
+                  echo "::error title=Deployment Denied::Prod apply/destroy require the current tip of main (compare status: ${compare_status})."
+                  exit 1
+                  ;;
+              esac
+            else
+              case "$compare_status" in
+                identical|behind) ;;
+                *)
+                  echo "::error title=Deployment Denied::Commit ${SHA} is not contained in main (compare status: ${compare_status})."
+                  exit 1
+                  ;;
+              esac
+            fi
+
+            # 4. Prod apply/destroy: fail closed if the Environment has no
+            # required reviewers. github.token must be able to GET
+            # /repos/{owner}/{repo}/environments/prod (contents:read is enough
+            # when Actions can read the repo; a 403 means raise Workflow
+            # permissions or use a token that can read Environments).
+            if [ "$EVENT_NAME" = "workflow_dispatch" ] && { [ "$INPUT_ACTION" = "apply" ] || [ "$INPUT_ACTION" = "destroy" ]; }; then
+              # Token must read GET /repos/{owner}/{repo}/environments/prod.
+              if ! reviewer_rules="$(gh api "repos/${GITHUB_REPOSITORY}/environments/prod" --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')"; then
+                echo "::error::Could not read the prod Environment. github.token needs permission to GET /repos/{owner}/{repo}/environments/prod."
+                exit 1
+              fi
+              if [ "${reviewer_rules}" = "0" ] || [ -z "${reviewer_rules}" ]; then
+                echo "::error::Prod Environment has no required reviewers. Add them under Settings → Environments → prod before apply/destroy."
+                exit 1
+              fi
+            fi
+          fi
+
+          # 5. Output Variables
           echo "Selected Environment: $ENV"
-          echo "Selected Ref: $REF"
+          echo "Selected Ref: $SHA"
 
           {
             echo "environment<<EOF"
@@ -107,7 +155,7 @@ jobs:
             echo "$ENV"
             echo "EOF"
             echo "ref_to_checkout<<EOF"
-            echo "$REF"
+            echo "$SHA"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -123,9 +171,30 @@ jobs:
         working-directory: ${{ needs.setup.outputs.work_dir }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
+
+      - name: Inject Terraform variables from Environment
+        env:
+          ALLOWED_SOURCE_RANGES: ${{ vars.ALLOWED_SOURCE_RANGES }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          if [ -z "${ALLOWED_SOURCE_RANGES}" ]; then
+            echo "::error::ALLOWED_SOURCE_RANGES is empty on the ${TARGET_ENV} Environment. Set it under Settings → Environments."
+            exit 1
+          fi
+          echo "TF_VAR_allowed_source_ranges=${ALLOWED_SOURCE_RANGES}" >> "$GITHUB_ENV"
+
+          # Empty string must not override Terraform's null default.
+          if [ -n "${GRAFANA_ADMIN_PASSWORD}" ]; then
+            {
+              echo "TF_VAR_grafana_admin_password<<EOF"
+              echo "${GRAFANA_ADMIN_PASSWORD}"
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+          fi
 
       - name: Resolve state bucket from tfvars
         working-directory: ${{ github.workspace }}
@@ -154,7 +223,9 @@ jobs:
           if grep -R --include='*.tf' --exclude-dir=.terraform -n 'google_project_iam_' \
             environments/dev environments/prod \
             modules/gke modules/identity modules/cloud-sql \
-            modules/arc modules/external-secrets; then
+            modules/arc modules/external-secrets \
+            modules/artifact-registry modules/middleware \
+            modules/network modules/network-peering; then
             echo "::error::Day-2 paths must not declare google_project_iam_* (project IAM is bootstrap-only)"
             exit 1
           fi
@@ -166,7 +237,7 @@ jobs:
           echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV   
 
       - name: Cache Terraform Plugins
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.terraform.d/plugin-cache
           key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
@@ -186,8 +257,27 @@ jobs:
       - name: Run TFLint
         run: tflint --init && tflint
 
-      - name: Run TFSec
-        run: tfsec .
+      - name: Run Trivy
+        run: |
+          # v0.74.0. The current VM was built before this pin; new VMs install it in startup.sh.
+          if ! command -v trivy >/dev/null 2>&1; then
+            workdir="$(mktemp -d)"
+            archive="${workdir}/trivy.tar.gz"
+            curl -fsSL -o "${archive}" "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz"
+            echo "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a  ${archive}" | sha256sum -c -
+            tar -xzf "${archive}" -C "${workdir}"
+            mkdir -p "${HOME}/.local/bin"
+            install -m 0755 "${workdir}/trivy" "${HOME}/.local/bin/trivy"
+            rm -rf "${workdir}"
+            export PATH="${HOME}/.local/bin:${PATH}"
+          fi
+          trivy config \
+            --exit-code 1 \
+            --severity LOW,MEDIUM,HIGH,CRITICAL \
+            --skip-dirs .terraform \
+            --skip-version-check \
+            --tf-vars terraform.tfvars \
+            .
 
   # Plan
   plan:
@@ -204,9 +294,30 @@ jobs:
         working-directory: ${{ needs.setup.outputs.work_dir }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
+
+      - name: Inject Terraform variables from Environment
+        env:
+          ALLOWED_SOURCE_RANGES: ${{ vars.ALLOWED_SOURCE_RANGES }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          if [ -z "${ALLOWED_SOURCE_RANGES}" ]; then
+            echo "::error::ALLOWED_SOURCE_RANGES is empty on the ${TARGET_ENV} Environment. Set it under Settings → Environments."
+            exit 1
+          fi
+          echo "TF_VAR_allowed_source_ranges=${ALLOWED_SOURCE_RANGES}" >> "$GITHUB_ENV"
+
+          # Empty string must not override Terraform's null default.
+          if [ -n "${GRAFANA_ADMIN_PASSWORD}" ]; then
+            {
+              echo "TF_VAR_grafana_admin_password<<EOF"
+              echo "${GRAFANA_ADMIN_PASSWORD}"
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+          fi
 
       - name: Resolve state bucket from tfvars
         working-directory: ${{ github.workspace }}
@@ -234,7 +345,7 @@ jobs:
           echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV   
 
       - name: Cache Terraform Plugins
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.terraform.d/plugin-cache
           key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
@@ -282,9 +393,33 @@ jobs:
         working-directory: ${{ needs.setup.outputs.work_dir }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
+
+      - name: Inject Terraform variables from Environment
+        env:
+          ALLOWED_SOURCE_RANGES: ${{ vars.ALLOWED_SOURCE_RANGES }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          if [ -z "${ALLOWED_SOURCE_RANGES}" ]; then
+            echo "::error::ALLOWED_SOURCE_RANGES is empty on the ${TARGET_ENV} Environment. Set it under Settings → Environments."
+            exit 1
+          fi
+          echo "TF_VAR_allowed_source_ranges=${ALLOWED_SOURCE_RANGES}" >> "$GITHUB_ENV"
+
+          # Empty string must not override Terraform's null default.
+          if [ -n "${GRAFANA_ADMIN_PASSWORD}" ]; then
+            {
+              echo "TF_VAR_grafana_admin_password<<EOF"
+              echo "${GRAFANA_ADMIN_PASSWORD}"
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+          elif [ "${TARGET_ENV}" = "prod" ]; then
+            echo "::error::GRAFANA_ADMIN_PASSWORD must be set on the prod Environment for apply."
+            exit 1
+          fi
 
       - name: Resolve state bucket from tfvars
         working-directory: ${{ github.workspace }}
@@ -312,7 +447,7 @@ jobs:
           echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV   
 
       - name: Cache Terraform Plugins
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.terraform.d/plugin-cache
           key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
@@ -328,16 +463,19 @@ jobs:
         run: |
           plan_object="gs://${TF_STATE_BUCKET}/plans/${TARGET_ENV}/${GITHUB_RUN_ID}.tfplan"
           gcloud storage cp "${plan_object}" tfplan
-          set +e
           terraform apply -lock-timeout=5m tfplan
-          status=$?
-          gcloud storage rm --all-versions "${plan_object}"
-          rm_status=$?
           rm -f tfplan
-          if [ "${status}" -ne 0 ]; then
-            exit "${status}"
+
+      - name: Delete applied plan
+        if: success()
+        env:
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          plan_object="gs://${TF_STATE_BUCKET}/plans/${TARGET_ENV}/${GITHUB_RUN_ID}.tfplan"
+          if ! gcloud storage rm --all-versions "${plan_object}"; then
+            echo "::warning::Failed to delete ${plan_object}. The 1-day plans/ lifecycle will remove it."
+            exit 0
           fi
-          exit "${rm_status}"
 
   # Destroy applies the destroy plan saved by the plan job. No auto-approve destroy.
   destroy:
@@ -353,9 +491,30 @@ jobs:
         working-directory: ${{ needs.setup.outputs.work_dir }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup.outputs.ref_to_checkout }}
+
+      - name: Inject Terraform variables from Environment
+        env:
+          ALLOWED_SOURCE_RANGES: ${{ vars.ALLOWED_SOURCE_RANGES }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          if [ -z "${ALLOWED_SOURCE_RANGES}" ]; then
+            echo "::error::ALLOWED_SOURCE_RANGES is empty on the ${TARGET_ENV} Environment. Set it under Settings → Environments."
+            exit 1
+          fi
+          echo "TF_VAR_allowed_source_ranges=${ALLOWED_SOURCE_RANGES}" >> "$GITHUB_ENV"
+
+          # Empty string must not override Terraform's null default.
+          if [ -n "${GRAFANA_ADMIN_PASSWORD}" ]; then
+            {
+              echo "TF_VAR_grafana_admin_password<<EOF"
+              echo "${GRAFANA_ADMIN_PASSWORD}"
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+          fi
 
       - name: Resolve state bucket from tfvars
         working-directory: ${{ github.workspace }}
@@ -383,7 +542,7 @@ jobs:
           echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> $GITHUB_ENV   
 
       - name: Cache Terraform Plugins
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.terraform.d/plugin-cache
           key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
@@ -399,13 +558,16 @@ jobs:
         run: |
           plan_object="gs://${TF_STATE_BUCKET}/plans/${TARGET_ENV}/${GITHUB_RUN_ID}.tfplan"
           gcloud storage cp "${plan_object}" tfplan
-          set +e
           terraform apply -lock-timeout=5m tfplan
-          status=$?
-          gcloud storage rm --all-versions "${plan_object}"
-          rm_status=$?
           rm -f tfplan
-          if [ "${status}" -ne 0 ]; then
-            exit "${status}"
+
+      - name: Delete applied destroy plan
+        if: success()
+        env:
+          TARGET_ENV: ${{ needs.setup.outputs.environment }}
+        run: |
+          plan_object="gs://${TF_STATE_BUCKET}/plans/${TARGET_ENV}/${GITHUB_RUN_ID}.tfplan"
+          if ! gcloud storage rm --all-versions "${plan_object}"; then
+            echo "::warning::Failed to delete ${plan_object}. The 1-day plans/ lifecycle will remove it."
+            exit 0
           fi
-          exit "${rm_status}"

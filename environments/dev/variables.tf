@@ -95,6 +95,12 @@ variable "grafana_admin_password" {
   sensitive   = true
 }
 
+variable "deletion_protection" {
+  description = "When true, GKE and Cloud SQL cannot be destroyed. Set false in tfvars and apply before an intentional destroy."
+  type        = bool
+  default     = true
+}
+
 # ------------------------------------------------------------------------------
 # GKE runner node pool (ARC)
 # ------------------------------------------------------------------------------

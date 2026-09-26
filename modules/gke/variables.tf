@@ -12,7 +12,7 @@ variable "cluster_location" {
 
 variable "node_locations" {
   type        = list(string)
-  description = "Zones where worker nodes may run. For a zonal cluster, typically a single zone matching cluster_location."
+  description = "Extra zones for a multi-zonal or regional cluster. Leave empty for a zonal cluster; its nodes run in cluster_location. Do not repeat cluster_location here."
 }
 
 variable "cluster_name" {
@@ -78,15 +78,6 @@ variable "max_unavailable" {
 variable "subnet_ip_cidr_range" {
   type        = string
   description = "The primary IP range of the app subnet (for master authorized networks)."
-}
-
-variable "additional_master_authorized_networks" {
-  type = list(object({
-    cidr_block   = string
-    display_name = string
-  }))
-  description = "Extra CIDRs allowed to reach the private GKE control plane (e.g. infra runner subnet)."
-  default     = []
 }
 
 variable "node_pool_name" {
@@ -181,7 +172,7 @@ variable "runner_node_pool_name" {
 
 variable "runner_machine_type" {
   type        = string
-  description = "Machine type for ARC runner nodes (Kaniko builds need more CPU/memory than app nodes)."
+  description = "Machine type for ARC runner nodes (image builds need more CPU/memory than app nodes)."
   default     = "e2-standard-4"
 }
 
@@ -205,6 +196,12 @@ variable "runner_disk_size_gb" {
 
 variable "runner_image_type" {
   type        = string
-  description = "Image type for runner nodes. COS_CONTAINERD is preferred for non-privileged Kaniko builds."
-  default     = "COS_CONTAINERD"
+  description = "Image type for ARC runner nodes. UBUNTU_CONTAINERD is required for rootless BuildKit. The app pool stays on image_type (COS_CONTAINERD)."
+  default     = "UBUNTU_CONTAINERD"
+}
+
+variable "deletion_protection" {
+  type        = bool
+  description = "When true, Terraform refuses to destroy this cluster. Set false and apply before an intentional destroy."
+  default     = true
 }

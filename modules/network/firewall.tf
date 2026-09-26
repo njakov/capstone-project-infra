@@ -12,8 +12,8 @@ resource "google_compute_firewall" "allow_iap_ssh" {
     ports    = ["22"]
   }
 
-  # This specific IP range is owned by Google IAP.
-  # tfsec:ignore:google-compute-no-public-ingress
+  # Google IAP's published range. The rule is limited to target_tags, so it is
+  # not open ingress. Trivy only flags 0.0.0.0/0 when no tags are set.
   source_ranges = ["35.235.240.0/20"]
   target_tags   = var.iap_ssh_target_tags
 }

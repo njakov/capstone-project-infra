@@ -55,6 +55,31 @@ else
   echo "CryptoKey already exists, skipping creation."
 fi
 
+DISK_KEY_NAME="runner-disk-key"
+echo "Creating KMS CryptoKey '${DISK_KEY_NAME}' for the infra runner boot disk..."
+if ! gcloud kms keys describe "${DISK_KEY_NAME}" --keyring="${KEYRING}" --location="${LOCATION}" --project="${PROJECT_ID}" &>/dev/null; then
+  gcloud kms keys create "${DISK_KEY_NAME}" \
+    --keyring="${KEYRING}" \
+    --location="${LOCATION}" \
+    --purpose="encryption" \
+    --project="${PROJECT_ID}"
+else
+  echo "Runner disk CryptoKey already exists, skipping creation."
+fi
+
+echo "Enabling Compute Engine so its service agent can use the disk key..."
+gcloud services enable compute.googleapis.com --project="${PROJECT_ID}"
+PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
+COMPUTE_AGENT="serviceAccount:service-${PROJECT_NUMBER}@compute-system.iam.gserviceaccount.com"
+echo "Granting cloudkms.cryptoKeyEncrypterDecrypter to ${COMPUTE_AGENT}..."
+gcloud kms keys add-iam-policy-binding "${DISK_KEY_NAME}" \
+  --keyring="${KEYRING}" \
+  --location="${LOCATION}" \
+  --project="${PROJECT_ID}" \
+  --member="${COMPUTE_AGENT}" \
+  --role="roles/cloudkms.cryptoKeyEncrypterDecrypter" \
+  --quiet >/dev/null
+
 echo "Authorizing GCS service agent to use the KMS key..."
 gcloud storage service-agent --authorize-cmek="projects/${PROJECT_ID}/locations/${LOCATION}/keyRings/${KEYRING}/cryptoKeys/${KEY_NAME}" \
   --project="${PROJECT_ID}"
@@ -66,14 +91,14 @@ if ! gcloud storage buckets describe "gs://$BUCKET_NAME" --project="$PROJECT_ID"
     --location="$LOCATION" \
     --default-encryption-key="projects/${PROJECT_ID}/locations/${LOCATION}/keyRings/${KEYRING}/cryptoKeys/${KEY_NAME}" \
     --uniform-bucket-level-access \
-    --public-access-prevention=enforced
+    --public-access-prevention
   echo "Bucket created successfully."
 else
   echo "Bucket already exists, skipping creation."
 fi
 
 echo "Enforcing public access prevention on bucket: $BUCKET_NAME..."
-gcloud storage buckets update "gs://$BUCKET_NAME" --public-access-prevention=enforced
+gcloud storage buckets update "gs://$BUCKET_NAME" --public-access-prevention
 
 echo "Enabling versioning on bucket: $BUCKET_NAME..."
 gcloud storage buckets update "gs://$BUCKET_NAME" --versioning

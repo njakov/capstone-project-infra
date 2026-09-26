@@ -63,7 +63,6 @@ For more details, please refer to:
 │   ├── runner/              # Infra-only self-hosted GitHub Actions runner VM
 │   └── arc/                 # ARC controller + scale set + NetworkPolicies
 ├── scripts/                 # Bash scripts for setup and bootstrapping
-└── .tfsec/                  # Security scanner configuration
 ``` 
 
 ## Architecture
@@ -79,16 +78,16 @@ See [ADR 001: Runner isolation](docs/adr/001-runner-isolation.md) for locked dec
     * **Peering (env):** bidirectional peering connects the infra and app VPCs. Terraform reaches the private GKE control plane through the cluster DNS endpoint over Private Google Access, not through exported custom routes (peering is not transitive; Regular-channel control planes use Private Service Connect).
     * **Cloud NAT:** private nodes/VMs egress without public IPs.
 2.  **Compute (`modules/gke`, `modules/runner`, `modules/arc`):**
-    * **GKE:** Private cluster with VPC-native networking on the **app** VPC. Private nodes and the private IP endpoint stay enabled; IP endpoints stay on. Helm and the Kubernetes provider use the DNS endpoint (`allow_external_traffic`) with `gke-gcloud-auth-plugin` and omit the cluster CA. Kubernetes ServiceAccount tokens and client certificates stay disabled on that name. Master authorized networks apply to the IP endpoint only (app subnet and infra runner subnet). The DNS name has no network allowlist. Second node pool `runners` is tainted (`github.runner=true:NoSchedule`) and labeled `workload=github-runner` for ARC only. Dev is **zonal**; prod is **regional** (two zones) — see ADR sizing table.
+    * **GKE:** Private cluster with VPC-native networking on the **app** VPC. Private nodes and the private IP endpoint stay enabled; IP endpoints stay on. Helm and the Kubernetes provider use the DNS endpoint (`allow_external_traffic`) with `gke-gcloud-auth-plugin` and omit the cluster CA. Kubernetes ServiceAccount tokens and client certificates stay disabled on that name. Master authorized networks apply to the IP endpoint only (app subnet). The infra runner subnet is not listed, because peering does not advertise the master CIDR. The DNS name has no network allowlist. Second node pool `runners` is tainted (`github.runner=true:NoSchedule`) and labeled `workload=github-runner` for ARC only. Dev is **zonal**; prod is **regional** (two zones) — see ADR sizing table.
     * **Infra GitHub Runner:** GCE VM `runner-vm-infra-{env}` on the infra VPC (`e2-medium`). Register with labels `self-hosted`, `infra`, `{env}`. Day-2 path is Terraform-only (no Docker builds required on this VM).
-    * **ARC:** ephemeral app runners (`petclinic-arc-{env}`) in the same GKE cluster via `modules/arc`, using `github-app-runner-sa-{env}` Workload Identity. That account has `artifactregistry.writer` and custom role `arcAppDeploy` (`container.clusters.get`, `container.clusters.getCredentials`, `container.clusters.connect`, `container.namespaces.get`). Kubernetes RBAC is a Role in `petclinic` plus get Services in `ingress-nginx`. Cutover steps: [docs/arc-cutover.md](docs/arc-cutover.md).
+    * **ARC:** ephemeral app runners (`petclinic-arc-{env}`) in the same GKE cluster via `modules/arc`, using `github-app-runner-sa-{env}` Workload Identity. That account has `roles/artifactregistry.writer` on `{app}-repo-{env}` only (not project-level). The GKE node service account has `roles/artifactregistry.reader` on that same repository only. The app-runner account also has custom role `arcAppDeploy` (`container.clusters.get`, `container.clusters.getCredentials`, `container.clusters.connect`, `container.namespaces.get`). Kubernetes RBAC is a Role in `petclinic` plus get Services in `ingress-nginx`. `roles/artifactregistry.reader` and `roles/artifactregistry.writer` stay on `terraform-sa-binder-workload` so the next bootstrap can revoke leftover project-level grants. Cutover steps: [docs/arc-cutover.md](docs/arc-cutover.md).
 3.  **Database (`modules/cloud-sql`):**
     * Cloud SQL (MySQL 8.0) connected via Private Service Access on the **app** VPC.
     * Passwords are generated randomly and stored immediately in **Google Secret Manager**.
 4.  **Security / IAM:**
     * **Workload Identity:** App pods in namespace `petclinic` use K8s SA `petclinic` mapped to `petclinic-sa-{env}`. ARC runners use a separate GCP SA. The identity module binds Workload Identity and that app-runner Kubernetes RBAC (no day-2 `google_project_iam_*`).
     * **`terraform-sa`:** conditioned `projectIamAdmin` binder for bootstrap only; **disabled** after bootstrap (`scripts/lock-terraform-sa.sh`). No project-level `serviceAccountUser`; state bucket is `storage.objectAdmin` only.
-    * **`github-infra-runner-sa-{env}`:** day-2 apply identity — workload `*admin` + `networkAdmin` inside its project; **no** `projectIamAdmin` / project SA admin/user. Resource-level D6 grants from bootstrap are `infraRunnerWorkloadIdentityAdmin` on the app, app-runner, and external-secrets accounts, conditioned so `setIamPolicy` may only change `roles/iam.workloadIdentityUser`, plus `serviceAccountUser` on the node SA.
+    * **`github-infra-runner-sa-{env}`:** day-2 apply identity — workload `*admin` + `networkAdmin` inside its project; **no** `projectIamAdmin` / project SA admin/user. Resource-level D6 grants from bootstrap are `infraRunnerWorkloadIdentityAdmin` on the app, app-runner, and external-secrets accounts. The condition is `hasOnly(['roles/iam.workloadIdentityUser'])`, so `setIamPolicy` may only change that role and `getIamPolicy` stays allowed. The node SA grant is `serviceAccountUser`.
     * **Secret Manager:** Centralized management for DB credentials and URLs (infra runner has `secretmanager.admin` by design).
 
 ## Architecture Diagram
@@ -102,7 +101,7 @@ See [ADR 001: Runner isolation](docs/adr/001-runner-isolation.md) for locked dec
 1.  **GCP projects:** Dev = existing `project-62ebde90-46b7-4e70-b59` (display name **PetClinic Dev**; ID immutable). Prod = **new** project (display name **PetClinic Prod**; ID `petclinic-gke-prod`). Never reuse the dev UUID.
 2.  **Google Cloud SDK:** Installed and authenticated locally (`gcloud auth login`).  
 3.  **Application Default Credentials (user):** `gcloud auth application-default login` — as **your user**, without `--impersonate`. Bootstrap then forces Terraform to act as `terraform-sa` via impersonation.  
-4.  **Terraform:** Installed (v1.16.0).
+4.  **Terraform:** Installed (v1.16.x; the runner apt pin is 1.16.3).
 
 ### Terraform authentication (two principals)
 
@@ -232,9 +231,9 @@ Infra apply runs only through **`infra-pipeline.yml`** on runners labeled `self-
 ### Main Infrastructure Pipeline (`infra-pipeline.yml`)
 
 *   **Trigger:** Pushes to `main` (plans **dev**), or manual `workflow_dispatch` for `dev` / `prod` with `plan` / `apply` / `destroy`.
-*   **Protection:** Production deployments are limited to the `main` branch. The setup job accepts only `dev` or `prod`, rejects a ref that contains a newline, and writes job outputs with a delimiter. Validate, plan, apply, and destroy use the GitHub Environment for deployment protection. `project_id` and `region` come from `environments/${env}/terraform.tfvars`. Apply and destroy download `gs://terraform-state-bucket-${project_id}/plans/${env}/${run_id}.tfplan` from the state bucket and delete that object after apply, including when apply fails. Plan-only runs delete the object immediately. A one-day lifecycle rule on `plans/` is the backstop. Required reviewers on prod are an operator setting (Step 4); this workflow cannot configure them.
+*   **Protection:** Production deploys a commit that is contained in `main`. Setup resolves the ref once to a commit SHA, and validate, plan, apply, and destroy all check out that same SHA. The setup job accepts only `dev` or `prod`, rejects a ref that contains a newline, and writes job outputs with a delimiter. Those jobs use the GitHub Environment for deployment protection. `project_id` and `region` come from `environments/${env}/terraform.tfvars`. Apply and destroy download `gs://terraform-state-bucket-${project_id}/plans/${env}/${run_id}.tfplan` from the state bucket and delete that object only after a successful apply. A failed apply leaves the object in place. Plan-only runs delete the object immediately. A one-day lifecycle rule on `plans/` is the backstop. Required reviewers on prod are an operator setting (Step 4); this workflow cannot configure them. Restrict the `prod` Environment deployment branches to `main`, and require reviewers on plan and destroy as well as apply.
 *   **Runner:** `[self-hosted, infra, dev|prod]` — must match the GCE infra runner registration labels.
-*   **Guards:** Before `terraform init`, validate, plan, apply, and destroy fail closed unless `environments/${env}/terraform.tfvars` exists and `project_id` parses. They init `terraform-state-bucket-${project_id}` from that value. CI also fails if `google_project_iam_` appears under `environments/{dev,prod}` or `modules/{gke,identity,cloud-sql}`.
+*   **Guards:** Before `terraform init`, validate, plan, apply, and destroy fail closed unless `environments/${env}/terraform.tfvars` exists and `project_id` parses. They init `terraform-state-bucket-${project_id}` from that value. CI also fails if `google_project_iam_` appears under `environments/{dev,prod}` or `modules/{gke,identity,cloud-sql,arc,external-secrets,artifact-registry,middleware,network,network-peering}`.
 
 Application build/release/deploy workflows live in the **[capstone-project-app](https://github.com/njakov/capstone-project-app)** repository (not this repo). After ARC cutover they target scale set names such as `petclinic-arc-dev` / `petclinic-arc-prod`.
 
@@ -245,20 +244,21 @@ Application build/release/deploy workflows live in the **[capstone-project-app](
 
 | Workflow | Trigger | Description |
 | :--- | :--- | :--- |
-| **PR Release** (`pr-release.yml`) | Pull Request | Unit tests, static analysis, Trivy; builds to the **dev** registry. |
-| **Main Release** (`main-release.yml`) | Push to `main` | SemVer tag after tests/scan, image push to the **prod** registry. |
-| **Manual Deploy** (`manual-deploy.yml`) | Manual Dispatch | Helm deploy of a chosen version to the target environment. |
+| **PR Release** (`pr-release.yml`) | Pull Request | Unit tests, static analysis, Trivy; builds to the **dev** registry. No deploy. |
+| **Deploy to dev** (`deploy-dev.yml`) | Push to `main` | Rebuild, scan, push to the **dev** registry, Helm upgrade the shared dev cluster. |
+| **Main Release** (`main-release.yml`) | Push to `main` | SemVer tag after tests/scan, image push to the **prod** registry. No deploy. |
+| **Manual Deploy** (`manual-deploy.yml`) | Manual Dispatch | Helm deploy of a chosen version (prod promote, or a chosen tag to either env). |
 
 ## Tools & Technologies Used
 
 | Category | Tool | Description |
 | :--- | :--- | :--- |
-| **IaC** | Terraform | Infrastructure provisioning (v1.16.0). |
+| **IaC** | Terraform | Infrastructure provisioning (v1.16.x). |
 | **State** | GCS | Remote backend with versioning enabled. |
-| **Container** | Docker / Kaniko | Packaging; ARC builds prefer Kaniko (non-privileged). |
+| **Container** | Docker / BuildKit | Packaging; ARC builds use rootless BuildKit on Ubuntu runner nodes. |
 | **Orchestration** | Kubernetes (GKE) | Container management with VPC-native networking. |
 | **Charts** | Helm | Deploying Nginx Ingress and Prometheus stack. |
-| **Security** | TFSec / TFLint | Static analysis for Terraform code. |
+| **Security** | Trivy / TFLint | Static analysis for Terraform code. |
 | **Secrets** | Secret Manager | Secure storage for Database credentials and URLs. |
 | **CI/CD** | GitHub Actions | Infra on GCE; app on ARC ephemeral runners (after cutover). |
 
@@ -282,7 +282,7 @@ Important Notes
 
 *   **State Management:** The Terraform state is stored remotely in a GCS bucket (`terraform-state-bucket-${project_id}` — one per project).
     
-*   **Tear down:** Destroy **env first**, then bootstrap. Destroy GKE the same day prod screenshots finish.
+*   **Tear down:** GKE and Cloud SQL `deletion_protection` defaults to true. Set `deletion_protection = false` in that environment's tfvars, apply, then destroy **env first**, then bootstrap. Destroy GKE the same day prod screenshots finish.
     
 *   **Ingress access:** `allowed_source_ranges` in each environment's `terraform.tfvars` limits who can reach the Ingress LoadBalancer. Update it if your public IP changes.
     

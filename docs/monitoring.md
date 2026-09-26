@@ -38,19 +38,22 @@ Set in [`modules/middleware`](../modules/middleware/):
 | `prometheus_storage_size` | `10Gi` | RWO PVC for Prometheus |
 | Grafana sidecar `searchNamespace` | `ALL` | Loads dashboard ConfigMaps from `petclinic` (and any other NS) |
 | ServiceMonitor / rule namespace selectors | all namespaces | Picks up `release: prometheus-community` CRs from the app chart |
-| `grafana_admin_password` | `null` | Chart default `prom-operator` if unset |
+| `grafana_admin_password` | `null` | Chart default `prom-operator` if unset. CI: Environment secret `GRAFANA_ADMIN_PASSWORD`. Local: `TF_VAR_grafana_admin_password`. |
 
 ### Grafana admin credentials
 
+Grafana’s admin password comes from the GitHub Environment secret `GRAFANA_ADMIN_PASSWORD` (exported as `TF_VAR_grafana_admin_password` when non-empty) or, for a local apply, from `TF_VAR_grafana_admin_password`. An empty secret must not override Terraform’s `null` default.
+
 - **Do not** leave the chart default unmentioned: if `grafana_admin_password` is unset, Grafana admin is `admin` / `prom-operator` (kube-prometheus-stack default).
-- For a real demo, set a one-time password without committing it:
+- Prod **apply** requires the Environment secret. Dev may omit it.
+- For a local demo, set a one-time password without committing it:
 
 ```bash
-# From Secret Manager or a local secret store — example only
+# Local apply — Environment secret in CI, TF_VAR_ on a laptop
 export TF_VAR_grafana_admin_password="$(gcloud secrets versions access latest --secret=grafana-admin-dev)"
 ```
 
-Wire the variable into the env stack if you add an explicit pass-through (module already accepts it). Rotate after the defense if the default was used.
+Do not commit the value. Rotate after the defense if the default was used.
 
 Port-forward Grafana:
 
@@ -78,5 +81,5 @@ External Alertmanager sinks (Slack/email webhook) are **out of MVP**; firing in 
 ## Related docs
 
 - [ADR 001: Runner isolation](adr/001-runner-isolation.md) — accepted risks; monitoring is orthogonal to runner trust.
-- [README: Retarget GCP project](../README.md#retarget-gcp-project) — update tfvars and GitHub Actions variables when switching projects.
+- [README: Retarget GCP project](../README.md#retarget-gcp-project) — update tfvars and GitHub Environment `ALLOWED_SOURCE_RANGES` / `GRAFANA_ADMIN_PASSWORD` when switching projects.
 - App README — Actuator / Helm deploy notes.

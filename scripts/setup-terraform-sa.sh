@@ -15,8 +15,10 @@
 #
 # Grants (per project):
 #   - TERRAFORM_SA_ROLES from lib/config.sh (no project-level serviceAccountUser)
-#   - conditioned projectIamAdmin (binder allow-list CEL)
-#   - bucket roles/storage.objectAdmin only (not storage.admin)
+#   - two conditioned projectIamAdmin bindings (each hasOnly list is at most 10 roles)
+#   - bucket roles/storage.objectAdmin only (not storage.admin), for terraform-sa
+#     and for github-infra-runner-sa-<env> (member may not exist yet)
+#   - roles/cloudkms.cryptoKeyEncrypterDecrypter on runner-disk-key (create-bucket.sh)
 #   - TokenCreator for YOUR_USER_EMAIL on terraform-sa
 #
 # Also creates project custom roles (terraform-sa has no roles/iam.roleAdmin):
@@ -26,7 +28,9 @@
 #     Bootstrap binds it on the app-runner SA. No secret or RBAC-admin verbs.
 #
 # Before granting conditioned projectIamAdmin, removes any unconditioned binding
-# (--condition=None) so IAM OR does not bypass the CEL constraint.
+# (--condition=None) and any previous conditional projectIamAdmin binding for
+# this SA (get → filter → set, policy version 3 + etag), so an old allow-list
+# is not OR'd with the new ones.
 
 set -e
 
@@ -163,36 +167,134 @@ for role in "${TERRAFORM_SA_ROLES[@]}"; do
     --quiet >/dev/null
 done
 
-CONDITION_EXPRESSION="$(terraform_sa_iam_binder_condition_expression)"
-CONDITION_TITLE="$(terraform_sa_iam_binder_condition_title)"
-CONDITION_DESCRIPTION="$(terraform_sa_iam_binder_condition_description)"
-
-# Use --condition-from-file: the CEL expression contains commas, which break
-# --condition=expression=...,title=...,description=... field splitting.
-CONDITION_FILE="$(mktemp)"
-trap 'rm -f "${CONDITION_FILE}"' EXIT
-cat > "${CONDITION_FILE}" <<EOF
-expression: "${CONDITION_EXPRESSION}"
-title: ${CONDITION_TITLE}
-description: ${CONDITION_DESCRIPTION}
-EOF
-
+# Drop every conditional projectIamAdmin binding for terraform-sa, including the
+# retired single allow-list and any previous copy of the two new titles.
+# Unconditioned bindings are removed above and are left untouched here.
+# Force policy version 3 and refuse to write without etag. Retry get → filter →
+# set on etag conflict.
 echo "---"
-echo "Granting conditioned roles/resourcemanager.projectIamAdmin..."
-echo "  title: ${CONDITION_TITLE}"
-echo "  expression: ${CONDITION_EXPRESSION}"
+echo "Replacing conditional projectIamAdmin bindings for ${SA_EMAIL} (including ${TERRAFORM_SA_IAM_BINDER_RETIRED_TITLE})..."
+POLICY_FILE="$(mktemp)"
+FILTERED_POLICY_FILE="$(mktemp)"
+trap 'rm -f "${POLICY_FILE}" "${FILTERED_POLICY_FILE}"' EXIT
 
-gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-  --member="serviceAccount:${SA_EMAIL}" \
-  --role="roles/resourcemanager.projectIamAdmin" \
-  --condition-from-file="${CONDITION_FILE}" \
-  --quiet >/dev/null
+replace_conditional_project_iam_admin() {
+  local max_attempts=3
+  local attempt set_output set_status
+
+  for attempt in $(seq 1 "${max_attempts}"); do
+    echo "Fetching project IAM policy (attempt ${attempt}/${max_attempts})..."
+    gcloud projects get-iam-policy "${PROJECT_ID}" --format=json > "${POLICY_FILE}"
+    python3 - "${POLICY_FILE}" "serviceAccount:${SA_EMAIL}" "${FILTERED_POLICY_FILE}" <<'PY'
+import json
+import sys
+
+source, member, dest = sys.argv[1:]
+with open(source, encoding="utf-8") as handle:
+    policy = json.load(handle)
+
+if "etag" not in policy:
+    raise SystemExit("Refusing to set IAM policy without etag")
+policy["version"] = 3
+
+role = "roles/resourcemanager.projectIamAdmin"
+kept = []
+removed = 0
+for binding in policy.get("bindings", []):
+    conditioned = bool(binding.get("condition"))
+    members = binding.get("members", [])
+    if binding.get("role") == role and conditioned and member in members:
+        removed += 1
+        remaining = [item for item in members if item != member]
+        if remaining:
+            binding["members"] = remaining
+            kept.append(binding)
+        continue
+    kept.append(binding)
+
+policy["bindings"] = kept
+with open(dest, "w", encoding="utf-8") as handle:
+    json.dump(policy, handle)
+print(f"Removed {removed} conditional projectIamAdmin binding(s) for {member}.")
+PY
+
+    set +e
+    set_output="$(gcloud projects set-iam-policy "${PROJECT_ID}" "${FILTERED_POLICY_FILE}" --quiet 2>&1)"
+    set_status=$?
+    set -e
+    if [ "${set_status}" -eq 0 ]; then
+      echo "${set_output}"
+      return 0
+    fi
+    if echo "${set_output}" | grep -Eqi 'etag|concurrent|ABORTED|409'; then
+      echo "IAM etag conflict; retrying get → filter → set..."
+      continue
+    fi
+    echo "${set_output}" >&2
+    return 1
+  done
+
+  echo "Error: failed to replace conditional projectIamAdmin after ${max_attempts} etag retries." >&2
+  return 1
+}
+replace_conditional_project_iam_admin
+
+grant_conditioned_project_iam() {
+  local title="$1"
+  local description="$2"
+  local expression="$3"
+  local condition_file
+
+  condition_file="$(mktemp)"
+  # The CEL expression contains commas, which break
+  # --condition=expression=...,title=...,description=... field splitting.
+  cat > "${condition_file}" <<EOF
+expression: "${expression}"
+title: ${title}
+description: ${description}
+EOF
+  echo "---"
+  echo "Granting conditioned roles/resourcemanager.projectIamAdmin..."
+  echo "  title: ${title}"
+  echo "  expression: ${expression}"
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+    --member="serviceAccount:${SA_EMAIL}" \
+    --role="roles/resourcemanager.projectIamAdmin" \
+    --condition-from-file="${condition_file}" \
+    --quiet >/dev/null
+  rm -f "${condition_file}"
+}
+
+grant_conditioned_project_iam \
+  "$(terraform_sa_iam_binder_workload_title)" \
+  "$(terraform_sa_iam_binder_workload_description)" \
+  "$(terraform_sa_iam_binder_workload_expression)"
+
+grant_conditioned_project_iam \
+  "$(terraform_sa_iam_binder_scoped_title)" \
+  "$(terraform_sa_iam_binder_scoped_description)" \
+  "$(terraform_sa_iam_binder_scoped_expression)"
 
 echo "---"
 echo "Granting state access on '${BUCKET_NAME}' (roles/storage.objectAdmin only)..."
-gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
+RUNNER_SA_EMAIL="github-infra-runner-sa-${ENV}@${PROJECT_ID}.iam.gserviceaccount.com"
+for member in "serviceAccount:${SA_EMAIL}" "serviceAccount:${RUNNER_SA_EMAIL}"; do
+  echo "  ${member}"
+  gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
+    --member="${member}" \
+    --role="roles/storage.objectAdmin" \
+    --quiet >/dev/null
+done
+
+echo "---"
+echo "Granting terraform-sa encrypt/decrypt on the runner boot disk key..."
+DISK_KEY_LOCATION="${REGION:-europe-west1}"
+gcloud kms keys add-iam-policy-binding "runner-disk-key" \
+  --keyring="terraform-state-keyring" \
+  --location="${DISK_KEY_LOCATION}" \
+  --project="${PROJECT_ID}" \
   --member="serviceAccount:${SA_EMAIL}" \
-  --role="roles/storage.objectAdmin" \
+  --role="roles/cloudkms.cryptoKeyEncrypterDecrypter" \
   --quiet >/dev/null
 
 echo "---"

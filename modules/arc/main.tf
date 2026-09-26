@@ -16,6 +16,37 @@ locals {
 
   github_config_secret_name = "arc-github-app"
   controller_sa_name        = "arc-gha-runner-scale-set-controller"
+
+  # ARC sidecar adapter around official job.rootless.yaml.
+  # The scale-set sidecar is long-lived, so it cannot be the Job command
+  # itself. Each request runs the same official client:
+  #   buildctl-daemonless.sh build --frontend dockerfile.v0 ...
+  # which starts rootlesskit + buildkitd (image ENTRYPOINT), then buildctl.
+  # Output stays type=docker tar; crane on the runner pushes after Trivy.
+  # Spike: Job buildkit-rootless-spike in buildkit-spike completed 2026-09-22
+  # on gke-petclinic-gke-dev-runners (Ubuntu 24.04.4, kernel 6.8.0-1061-gke)
+  # with apparmor_restrict_unprivileged_userns=1.
+  buildkit_wait_script = <<EOT
+set -eu
+mkdir -p /buildkit-work/requests /home/user/.local/tmp /run/user/1000/buildkit
+while true; do
+  if [ -f /buildkit-work/requests/build.req ]; then
+    CONTEXT=$(sed -n 's/^CONTEXT=//p' /buildkit-work/requests/build.req)
+    DOCKERFILE=$(sed -n 's/^DOCKERFILE=//p' /buildkit-work/requests/build.req)
+    TAR_PATH=$(sed -n 's/^TAR_PATH=//p' /buildkit-work/requests/build.req)
+    IMAGE_NAME=$(sed -n 's/^DESTINATION=//p' /buildkit-work/requests/build.req)
+    rm -f /buildkit-work/requests/build.req /buildkit-work/requests/build.exit
+    DOCKERFILE_DIR=$(dirname "$DOCKERFILE")
+    DOCKERFILE_NAME=$(basename "$DOCKERFILE")
+    set +e
+    buildctl-daemonless.sh build --frontend dockerfile.v0 --local context="$CONTEXT" --local dockerfile="$DOCKERFILE_DIR" --opt filename="$DOCKERFILE_NAME" --output type=docker,dest="$TAR_PATH",name="$IMAGE_NAME" > /buildkit-work/build.log 2>&1
+    echo $? > /buildkit-work/requests/build.exit.tmp
+    mv /buildkit-work/requests/build.exit.tmp /buildkit-work/requests/build.exit
+    set -e
+  fi
+  sleep 1
+done
+EOT
 }
 
 # ------------------------------------------------------------------------------
@@ -157,7 +188,7 @@ resource "helm_release" "arc_controller" {
 # githubConfigSecret (arc-github-app) is synced by External Secrets, not Terraform.
 # If a previous apply owned the secret, forget it without deleting the object.
 removed {
-  from = kubernetes_secret_v1.github_app[0]
+  from = kubernetes_secret_v1.github_app
 
   lifecycle {
     destroy = false
@@ -188,22 +219,109 @@ resource "helm_release" "arc_runners" {
       }
 
       template = {
+        metadata = {
+          annotations = {
+            # Ubuntu 24.04 AppArmor still confines the container without this.
+            "container.apparmor.security.beta.kubernetes.io/buildkit" = "unconfined"
+          }
+        }
         spec = {
           serviceAccountName = var.runner_k8s_sa_name
           nodeSelector       = var.runner_node_selector
           tolerations        = var.runner_tolerations
-          # runAsUser 0: Kaniko executor (app CI) must unpack layers under /kaniko.
-          # Prefer this over privileged DinD; still not a hard security domain (see ADR).
+          # Official job.rootless.yaml: no hostUsers, no privileged, no
+          # extra capabilities. RootlessKit creates the user namespace.
+          # Default container mode (chart 0.10.1): a container not named
+          # "runner" is emitted as written. Do not set containerMode dind.
+          # Runner stays UID 0 because run-helper.sh exits without
+          # RUNNER_ALLOW_RUNASROOT.
+          volumes = [
+            {
+              name     = "buildkit-work"
+              emptyDir = {}
+            },
+            {
+              # Official rootless.md / job.rootless.yaml: image VOLUME is
+              # nosuid,nodev and cannot hold the rootless state directory.
+              name     = "buildkit-state"
+              emptyDir = {}
+            }
+          ]
           containers = [
             {
               name = "runner"
               # Chart stays 0.10.1. Image is actions-runner 2.337.0 (2026-08-26),
               # pinned to that tag's multi-arch index digest.
+              # run-helper.sh exits 1 as uid 0 unless RUNNER_ALLOW_RUNASROOT is set.
               image   = "ghcr.io/actions/actions-runner@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4"
               command = ["/home/runner/run.sh"]
+              env = [
+                {
+                  name  = "RUNNER_ALLOW_RUNASROOT"
+                  value = "1"
+                }
+              ]
               securityContext = {
                 runAsUser = 0
               }
+              volumeMounts = [
+                {
+                  name      = "buildkit-work"
+                  mountPath = "/buildkit-work"
+                }
+              ]
+            },
+            {
+              name = "buildkit"
+              # v0.33.0-rootless multi-arch index, resolved 2026-09-22.
+              # Official job.rootless.yaml securityContext and client.
+              image = "moby/buildkit@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef"
+              command = [
+                "/bin/sh",
+                "-c",
+                local.buildkit_wait_script,
+              ]
+              env = [
+                {
+                  name  = "BUILDKITD_FLAGS"
+                  value = "--oci-worker-no-process-sandbox"
+                },
+                {
+                  name  = "HOME"
+                  value = "/home/user"
+                },
+                {
+                  name  = "USER"
+                  value = "user"
+                },
+                {
+                  name  = "XDG_RUNTIME_DIR"
+                  value = "/run/user/1000"
+                }
+              ]
+              securityContext = {
+                # To change UID/GID, rebuild the image (official comment).
+                runAsUser  = 1000
+                runAsGroup = 1000
+                # Kubernetes >= 1.19
+                seccompProfile = {
+                  type = "Unconfined"
+                }
+                # Kubernetes >= 1.30
+                appArmorProfile = {
+                  type = "Unconfined"
+                }
+              }
+              volumeMounts = [
+                {
+                  name      = "buildkit-work"
+                  mountPath = "/buildkit-work"
+                },
+                {
+                  name      = "buildkit-state"
+                  mountPath = "/home/user/.local/share/buildkit"
+                }
+              ]
             }
           ]
         }
@@ -219,9 +337,10 @@ resource "helm_release" "arc_runners" {
 
 # ------------------------------------------------------------------------------
 # Demo-quality NetworkPolicies (Dataplane V2)
-# Primary isolation: default-deny in arc-runners; allow DNS, HTTPS, the API server,
-# and the GKE metadata server (Workload Identity).
-# Pod-to-pod HTTP to PetClinic ClusterIPs is denied by omission.
+# Primary isolation: default-deny in arc-runners; allow DNS, the metadata server,
+# and TCP/443 and TCP/6443 to everywhere except the private app and infra CIDRs.
+# The GKE master CIDR is not in that exception list. Pod-to-pod HTTP to
+# PetClinic ClusterIPs is denied by omission.
 # ------------------------------------------------------------------------------
 resource "kubernetes_network_policy_v1" "arc_runners_default_deny" {
   count = var.install_charts ? 1 : 0
@@ -261,6 +380,12 @@ resource "kubernetes_network_policy_v1" "arc_runners_allow_egress" {
     }
 
     egress {
+      to {
+        ip_block {
+          cidr   = "0.0.0.0/0"
+          except = var.https_egress_except_cidrs
+        }
+      }
       ports {
         protocol = "TCP"
         port     = "443"
@@ -268,6 +393,12 @@ resource "kubernetes_network_policy_v1" "arc_runners_allow_egress" {
     }
 
     egress {
+      to {
+        ip_block {
+          cidr   = "0.0.0.0/0"
+          except = var.https_egress_except_cidrs
+        }
+      }
       ports {
         protocol = "TCP"
         port     = "6443"
@@ -334,6 +465,12 @@ resource "kubernetes_network_policy_v1" "arc_systems_allow_egress" {
     }
 
     egress {
+      to {
+        ip_block {
+          cidr   = "0.0.0.0/0"
+          except = var.https_egress_except_cidrs
+        }
+      }
       ports {
         protocol = "TCP"
         port     = "443"
@@ -341,6 +478,12 @@ resource "kubernetes_network_policy_v1" "arc_systems_allow_egress" {
     }
 
     egress {
+      to {
+        ip_block {
+          cidr   = "0.0.0.0/0"
+          except = var.https_egress_except_cidrs
+        }
+      }
       ports {
         protocol = "TCP"
         port     = "6443"

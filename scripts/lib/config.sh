@@ -27,10 +27,16 @@ TERRAFORM_SA_ROLES=(
 )
 
 # Roles terraform-sa may grant/revoke via conditioned projectIamAdmin.
+# Google allows at most 10 roles in one hasOnly list, so this is two bindings.
+# IAM ORs the bindings. Do not join the two hasOnly calls with && or ||.
 # Do not add owner/editor/projectIamAdmin/securityAdmin/serviceAccountUser/Admin.
-# container.developer stays so bootstrap can revoke the old app-runner binding.
-# It is not granted to any member. arcAppDeploy is appended in the expression.
-TERRAFORM_SA_IAM_BINDER_ALLOWLIST=(
+# container.developer stays on the scoped list so bootstrap can revoke the old
+# app-runner binding. It is not granted to any member.
+# artifactregistry.reader and artifactregistry.writer stay on the workload list
+# so bootstrap can revoke leftover project-level grants. Live grants are
+# repository IAM in modules/artifact-registry.
+# arcAppDeploy is appended in the scoped expression.
+TERRAFORM_SA_IAM_BINDER_WORKLOAD=(
   "roles/compute.networkAdmin"
   "roles/container.admin"
   "roles/cloudsql.admin"
@@ -41,23 +47,20 @@ TERRAFORM_SA_IAM_BINDER_ALLOWLIST=(
   "roles/monitoring.metricWriter"
   "roles/artifactregistry.reader"
   "roles/artifactregistry.writer"
+)
+
+TERRAFORM_SA_IAM_BINDER_SCOPED=(
   "roles/container.developer"
   "roles/cloudsql.client"
 )
 
-# CEL expression for conditioned roles/resourcemanager.projectIamAdmin.
-terraform_sa_iam_binder_condition_expression() {
+# Previous single binding. setup-terraform-sa.sh removes it before adding the two below.
+TERRAFORM_SA_IAM_BINDER_RETIRED_TITLE="terraform-sa-limited-project-iam-admin"
+
+terraform_sa_iam_binder_join() {
   local joined=""
   local role
-  local -a roles=("${TERRAFORM_SA_IAM_BINDER_ALLOWLIST[@]}")
-
-  if [ -z "${PROJECT_ID:-}" ]; then
-    echo "Error: PROJECT_ID is not set before terraform_sa_iam_binder_condition_expression." >&2
-    return 1
-  fi
-  roles+=("projects/${PROJECT_ID}/roles/arcAppDeploy")
-
-  for role in "${roles[@]}"; do
+  for role in "$@"; do
     if [ -n "${joined}" ]; then
       joined="${joined}, "
     fi
@@ -66,12 +69,44 @@ terraform_sa_iam_binder_condition_expression() {
   echo "api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).hasOnly([${joined}])"
 }
 
-terraform_sa_iam_binder_condition_title() {
-  echo "terraform-sa-limited-project-iam-admin"
+terraform_sa_iam_binder_workload_expression() {
+  if [ "${#TERRAFORM_SA_IAM_BINDER_WORKLOAD[@]}" -gt 10 ]; then
+    echo "Error: workload binder list has ${#TERRAFORM_SA_IAM_BINDER_WORKLOAD[@]} roles; the maximum is 10." >&2
+    return 1
+  fi
+  terraform_sa_iam_binder_join "${TERRAFORM_SA_IAM_BINDER_WORKLOAD[@]}"
 }
 
-terraform_sa_iam_binder_condition_description() {
-  echo "Allow terraform-sa to grant or revoke only the allow-listed project IAM roles"
+terraform_sa_iam_binder_workload_title() {
+  echo "terraform-sa-binder-workload"
+}
+
+terraform_sa_iam_binder_workload_description() {
+  echo "Allow terraform-sa to grant or revoke the workload admin roles"
+}
+
+terraform_sa_iam_binder_scoped_expression() {
+  local -a roles
+
+  if [ -z "${PROJECT_ID:-}" ]; then
+    echo "Error: PROJECT_ID is not set before terraform_sa_iam_binder_scoped_expression." >&2
+    return 1
+  fi
+  roles=("${TERRAFORM_SA_IAM_BINDER_SCOPED[@]}")
+  roles+=("projects/${PROJECT_ID}/roles/arcAppDeploy")
+  if [ "${#roles[@]}" -gt 10 ]; then
+    echo "Error: scoped binder list has ${#roles[@]} roles; the maximum is 10." >&2
+    return 1
+  fi
+  terraform_sa_iam_binder_join "${roles[@]}"
+}
+
+terraform_sa_iam_binder_scoped_title() {
+  echo "terraform-sa-binder-scoped"
+}
+
+terraform_sa_iam_binder_scoped_description() {
+  echo "Allow terraform-sa to grant or revoke container.developer, cloudsql.client, and arcAppDeploy"
 }
 
 # Extract an unquoted or quoted HCL string value for KEY from a tfvars file.

@@ -57,7 +57,7 @@ if ! command -v terraform &> /dev/null; then
     wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null
     echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list
     apt-get update
-    apt-get install -y terraform
+    apt-get install -y terraform=1.16.3-1
 fi
 
 # 4. Install OpenJDK 25
@@ -86,16 +86,64 @@ if ! command -v kubectl &> /dev/null; then
     apt-get install -y google-cloud-cli google-cloud-cli-gke-gcloud-auth-plugin kubectl
 fi
 
-# 6. Install Helm
+# 6. Install Helm, TFLint, and Trivy from pinned archives.
+# Checksums are the upstream release digests. Do not pipe remote installers.
+install_pinned_archive() {
+  local url="$1"
+  local sha256="$2"
+  local archive_name="$3"
+  local binary_name="$4"
+  local workdir archive binary
+
+  workdir="$(mktemp -d)"
+  archive="${workdir}/${archive_name}"
+  curl -fsSL -o "${archive}" "${url}"
+  echo "${sha256}  ${archive}" | sha256sum -c -
+  case "${archive_name}" in
+    *.zip) unzip -q "${archive}" -d "${workdir}" ;;
+    *.tar.gz|*.tgz) tar -xzf "${archive}" -C "${workdir}" ;;
+    *)
+      echo "Unsupported archive ${archive_name}" >&2
+      rm -rf "${workdir}"
+      exit 1
+      ;;
+  esac
+  binary="$(find "${workdir}" -type f -name "${binary_name}" -print -quit)"
+  if [ -z "${binary}" ]; then
+    echo "Binary ${binary_name} not found in ${url}" >&2
+    rm -rf "${workdir}"
+    exit 1
+  fi
+  install -m 0755 "${binary}" "/usr/local/bin/${binary_name}"
+  rm -rf "${workdir}"
+}
+
 if ! command -v helm &> /dev/null; then
-    echo "Installing Helm..."
-    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  echo "Installing Helm v3.17.3..."
+  install_pinned_archive \
+    "https://get.helm.sh/helm-v3.17.3-linux-amd64.tar.gz" \
+    "ee88b3c851ae6466a3de507f7be73fe94d54cbf2987cbaa3d1a3832ea331f2cd" \
+    "helm.tgz" \
+    "helm"
 fi
 
-# 7. Install Security Scanners
-echo "Installing Scanners..."
-curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
-curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+if ! command -v tflint &> /dev/null; then
+  echo "Installing TFLint v0.58.1..."
+  install_pinned_archive \
+    "https://github.com/terraform-linters/tflint/releases/download/v0.58.1/tflint_linux_amd64.zip" \
+    "2fea1af8e8602d4d9e4253a588ac66f17bf36152cafb51f4d929b8bc6335e740" \
+    "tflint.zip" \
+    "tflint"
+fi
+
+if ! command -v trivy &> /dev/null; then
+  echo "Installing Trivy v0.74.0..."
+  install_pinned_archive \
+    "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz" \
+    "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a" \
+    "trivy.tar.gz" \
+    "trivy"
+fi
 
 # 7. Configure Docker Auth
 echo "Configuring Docker Auth..."

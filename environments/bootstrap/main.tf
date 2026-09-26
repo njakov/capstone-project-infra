@@ -25,8 +25,9 @@ module "runner" {
   zone         = "${var.region}-b"
   machine_type = "e2-medium"
 
-  network_name = module.infra_network.network_name
-  subnet_id    = module.infra_network.subnet_id
+  network_name    = module.infra_network.network_name
+  subnet_id       = module.infra_network.subnet_id
+  disk_kms_key_id = "projects/${var.project_id}/locations/${var.region}/keyRings/terraform-state-keyring/cryptoKeys/runner-disk-key"
 }
 
 # ------------------------------------------------------------------------------

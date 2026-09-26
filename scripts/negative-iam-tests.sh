@@ -5,9 +5,12 @@
 # Usage: ./scripts/negative-iam-tests.sh <env>
 # Example: ./scripts/negative-iam-tests.sh dev
 #
-# Expects PERMISSION_DENIED for each case. Run after setup_gcp + bootstrap with
-# terraform-sa still enabled (tests 1–2) and the infra runner SA present (tests 3–5).
-# Do not treat success as a green CI gate — these are manual / demo checks.
+# Expects PERMISSION_DENIED for bind/create cases. Run after setup_gcp + bootstrap
+# with terraform-sa still enabled (tests 1–2) and the infra / app-runner / node
+# SAs present (tests 3–5). Tests 4–5 fail until bootstrap-env.sh revokes leftover
+# project-level Artifact Registry bindings. Each impersonated test first checks
+# that the caller can mint a token for that service account. Do not treat
+# success as a green CI gate — these are manual / demo checks.
 #
 # Identifiers (override via env if needed):
 #   PROJECT_ID — else project_id from environments/bootstrap/<env>.tfvars
@@ -35,18 +38,51 @@ fi
 resolve_gcp_config "$TFVARS_FILE"
 resolve_user_email
 
-APP_NAME="$(tfvars_get app_name "${TFVARS_FILE}")"
-if [ -z "${APP_NAME}" ]; then
-  echo "Error: app_name not set in ${TFVARS_FILE}"
-  exit 1
-fi
-
 TF_SA="terraform-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 RUNNER_SA="github-infra-runner-sa-${ENV}@${PROJECT_ID}.iam.gserviceaccount.com"
-APP_SA="${APP_NAME}-sa-${ENV}@${PROJECT_ID}.iam.gserviceaccount.com"
 APP_RUNNER_SA="github-app-runner-sa-${ENV}@${PROJECT_ID}.iam.gserviceaccount.com"
-EXTERNAL_SECRETS_SA="external-secrets-${ENV}@${PROJECT_ID}.iam.gserviceaccount.com"
+APP_NAME="$(tfvars_get app_name "$TFVARS_FILE" || true)"
+if [ -z "${APP_NAME}" ]; then
+  echo "Error: app_name is missing from ${TFVARS_FILE}"
+  exit 1
+fi
+NODE_SA="${APP_NAME}-gke-${ENV}-node-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 REGION="${REGION:-europe-west1}"
+
+# Fail closed when the caller cannot act as the service account. A
+# PERMISSION_DENIED from a failed impersonation is not evidence the target API
+# denied that account.
+require_impersonation() {
+  local sa="$1"
+  local err_file token status payload email
+
+  echo ""
+  echo "=== Impersonation preflight: ${sa} ==="
+  err_file="$(mktemp)"
+  set +e
+  token="$(gcloud auth print-identity-token --impersonate-service-account="${sa}" 2>"${err_file}")"
+  status=$?
+  set -e
+  if [ "${status}" -ne 0 ] || [ -z "${token}" ]; then
+    echo "FAIL: cannot impersonate ${sa}."
+    cat "${err_file}"
+    rm -f "${err_file}"
+    return 1
+  fi
+  rm -f "${err_file}"
+
+  email="$(printf '%s' "${token}" | python3 -c 'import base64, json, sys
+raw = sys.stdin.read().strip().split(".")[1]
+raw = raw.replace("-", "+").replace("_", "/")
+raw += "=" * (-len(raw) % 4)
+print(json.loads(base64.b64decode(raw)).get("email", ""))')"
+  unset token
+  if [ "${email}" != "${sa}" ]; then
+    echo "FAIL: impersonated identity is '${email}', expected '${sa}'."
+    return 1
+  fi
+  echo "OK: caller can impersonate ${sa}."
+}
 
 expect_denied() {
   local label="$1"
@@ -57,6 +93,11 @@ expect_denied() {
   output="$("$@" 2>&1)"
   status=$?
   set -e
+  if echo "${output}" | grep -Eqi 'Failed to impersonate|Unable to impersonate|iam.serviceAccounts.getAccessToken|iam.serviceAccounts.getOpenIdToken'; then
+    echo "FAIL: impersonation failed. This does not prove the target API denied the service account."
+    echo "${output}"
+    return 1
+  fi
   if echo "${output}" | grep -Eqi 'PERMISSION_DENIED|AccessDeniedException|does not have permission|Caller does not have permission'; then
     echo "OK: got PERMISSION_DENIED as expected."
     return 0
@@ -71,103 +112,87 @@ expect_denied() {
   return 1
 }
 
-# Same denial check as expect_denied, for `gcloud iam service-accounts keys create`.
-# A successful create writes a private key to disk and a key on the SA. Delete
-# both before failing so a bad run does not leave a usable key behind.
-expect_key_create_denied() {
+# Absence check (not a denial): the app-runner SA must not have this role at
+# project scope. Repo-scoped writer in modules/artifact-registry is the only
+# grant. Fails until bootstrap-env.sh drops the leftover project binding.
+expect_no_project_role() {
   local label="$1"
-  local sa_email="$2"
-  local key_dir key_file output status key_id
-
-  key_dir="$(mktemp -d)"
-  key_file="${key_dir}/key.json"
+  local member="$2"
+  local role="$3"
+  local output status hits
 
   echo ""
   echo "=== ${label} ==="
   set +e
-  output="$(gcloud iam service-accounts keys create "${key_file}" \
-    --iam-account="${sa_email}" \
-    --project="${PROJECT_ID}" \
-    --impersonate-service-account="${RUNNER_SA}" \
-    --quiet 2>&1)"
+  output="$(gcloud projects get-iam-policy "${PROJECT_ID}" \
+    --flatten="bindings[].members" \
+    --filter="bindings.role=${role}" \
+    --format="value(bindings.members)" 2>&1)"
   status=$?
   set -e
-
-  if echo "${output}" | grep -Eqi 'PERMISSION_DENIED|AccessDeniedException|does not have permission|Caller does not have permission'; then
-    rm -rf "${key_dir}"
-    echo "OK: got PERMISSION_DENIED as expected."
-    return 0
-  fi
-
-  key_id=""
-  if [ -f "${key_file}" ]; then
-    key_id="$(sed -n -E 's/.*"private_key_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "${key_file}" | head -n1)"
-  fi
-  if [ -z "${key_id}" ]; then
-    key_id="$(printf '%s\n' "${output}" | sed -n -E 's/.*created key \[([^]]+)\].*/\1/p' | head -n1)"
-  fi
-  if [ -n "${key_id}" ]; then
-    echo "Unexpected key ${key_id} on ${sa_email}; deleting it before failing."
-    # Caller identity (Owner), not the runner: cleanup must work even if the
-    # runner can create keys but cannot delete them.
-    if ! gcloud iam service-accounts keys delete "${key_id}" \
-      --iam-account="${sa_email}" \
-      --project="${PROJECT_ID}" \
-      --quiet; then
-      echo "WARN: failed to delete key ${key_id} on ${sa_email}. Delete it manually."
-    fi
-  fi
-  rm -rf "${key_dir}"
-
-  if [ "${status}" -eq 0 ]; then
-    echo "FAIL: command succeeded (expected denial)."
+  if [ "${status}" -ne 0 ]; then
+    echo "FAIL: could not read project IAM policy (status=${status})."
     echo "${output}"
     return 1
   fi
-  echo "FAIL: command failed but denial string not found (status=${status})."
-  echo "${output}"
-  return 1
+  hits="$(printf '%s\n' "${output}" | grep -F "${member}" || true)"
+  if [ -n "${hits}" ]; then
+    echo "FAIL: ${member} still has project-level ${role}."
+    echo "${hits}"
+    return 1
+  fi
+  echo "OK: no project-level ${role} on ${member}."
+  return 0
 }
 
 failures=0
 
-# 1) terraform-sa must not bind roles/owner (off the binder allow-list).
-if ! expect_denied \
-  "1. Impersonate terraform-sa → bind roles/owner" \
-  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-    --member="user:${YOUR_USER_EMAIL}" \
-    --role="roles/owner" \
-    --impersonate-service-account="${TF_SA}" \
-    --condition=None; then
+if ! require_impersonation "${TF_SA}"; then
   failures=$((failures + 1))
-fi
+else
+  # 1) terraform-sa must not bind roles/owner (off the binder allow-list).
+  if ! expect_denied \
+    "1. Impersonate terraform-sa → bind roles/owner" \
+    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+      --member="user:${YOUR_USER_EMAIL}" \
+      --role="roles/owner" \
+      --impersonate-service-account="${TF_SA}" \
+      --condition=None; then
+    failures=$((failures + 1))
+  fi
 
-# 2) terraform-sa must not create GKE / SQL (no container.admin / cloudsql.admin).
-if ! expect_denied \
-  "2a. Impersonate terraform-sa → gcloud container clusters create" \
-  gcloud container clusters create "neg-test-denied" \
-    --project="${PROJECT_ID}" \
-    --region="${REGION}" \
-    --num-nodes=1 \
-    --impersonate-service-account="${TF_SA}" \
-    --quiet; then
-  failures=$((failures + 1))
-fi
+  # 2) terraform-sa must not create GKE / SQL (no container.admin / cloudsql.admin).
+  #    --dry-run so a mistaken grant does not leave a cluster or instance behind.
+  if ! expect_denied \
+    "2a. Impersonate terraform-sa → gcloud container clusters create --dry-run" \
+    gcloud container clusters create "neg-test-denied" \
+      --project="${PROJECT_ID}" \
+      --region="${REGION}" \
+      --num-nodes=1 \
+      --impersonate-service-account="${TF_SA}" \
+      --dry-run \
+      --quiet; then
+    failures=$((failures + 1))
+  fi
 
-if ! expect_denied \
-  "2b. Impersonate terraform-sa → gcloud sql instances create" \
-  gcloud sql instances create "neg-test-denied" \
-    --project="${PROJECT_ID}" \
-    --database-version=MYSQL_8_0 \
-    --tier=db-f1-micro \
-    --region="${REGION}" \
-    --impersonate-service-account="${TF_SA}" \
-    --quiet; then
-  failures=$((failures + 1))
+  if ! expect_denied \
+    "2b. Impersonate terraform-sa → gcloud sql instances create --dry-run" \
+    gcloud sql instances create "neg-test-denied" \
+      --project="${PROJECT_ID}" \
+      --database-version=MYSQL_8_0 \
+      --tier=db-f1-micro \
+      --region="${REGION}" \
+      --impersonate-service-account="${TF_SA}" \
+      --dry-run \
+      --quiet; then
+    failures=$((failures + 1))
+  fi
 fi
 
 # 3) Runner must not setIamPolicy on terraform-sa (D6: no SA admin on terraform-sa).
-if ! expect_denied \
+if ! require_impersonation "${RUNNER_SA}"; then
+  failures=$((failures + 1))
+elif ! expect_denied \
   "3. Impersonate runner → setIamPolicy on terraform-sa" \
   gcloud iam service-accounts add-iam-policy-binding "${TF_SA}" \
     --project="${PROJECT_ID}" \
@@ -177,67 +202,28 @@ if ! expect_denied \
   failures=$((failures + 1))
 fi
 
-# 4) Runner must not mint keys (WI custom role has no serviceAccountKeys.create).
-if ! expect_key_create_denied \
-  "4a. Impersonate runner → keys create on app SA" \
-  "${APP_SA}"; then
+# 4) App-runner SA must not have project-level artifactregistry.writer.
+#    Fails until bootstrap-env.sh drops the leftover google_project_iam_member.
+if ! expect_no_project_role \
+  "4. github-app-runner-sa-${ENV} has no project-level artifactregistry.writer" \
+  "serviceAccount:${APP_RUNNER_SA}" \
+  "roles/artifactregistry.writer"; then
   failures=$((failures + 1))
 fi
 
-if ! expect_key_create_denied \
-  "4b. Impersonate runner → keys create on app-runner SA" \
-  "${APP_RUNNER_SA}"; then
-  failures=$((failures + 1))
-fi
-
-if ! expect_key_create_denied \
-  "4c. Impersonate runner → keys create on terraform-sa" \
-  "${TF_SA}"; then
-  failures=$((failures + 1))
-fi
-
-if ! expect_key_create_denied \
-  "4d. Impersonate runner → keys create on external-secrets SA" \
-  "${EXTERNAL_SECRETS_SA}"; then
-  failures=$((failures + 1))
-fi
-
-# 5) Runner setIamPolicy may only change workloadIdentityUser. Binding key admin
-#    must be denied before any key is minted. This does not create a key.
-if ! expect_denied \
-  "5a. Impersonate runner → bind keyAdmin on app SA" \
-  gcloud iam service-accounts add-iam-policy-binding "${APP_SA}" \
-    --project="${PROJECT_ID}" \
-    --member="serviceAccount:${RUNNER_SA}" \
-    --role="roles/iam.serviceAccountKeyAdmin" \
-    --impersonate-service-account="${RUNNER_SA}"; then
-  failures=$((failures + 1))
-fi
-
-if ! expect_denied \
-  "5b. Impersonate runner → bind keyAdmin on app-runner SA" \
-  gcloud iam service-accounts add-iam-policy-binding "${APP_RUNNER_SA}" \
-    --project="${PROJECT_ID}" \
-    --member="serviceAccount:${RUNNER_SA}" \
-    --role="roles/iam.serviceAccountKeyAdmin" \
-    --impersonate-service-account="${RUNNER_SA}"; then
-  failures=$((failures + 1))
-fi
-
-if ! expect_denied \
-  "5c. Impersonate runner → bind keyAdmin on external-secrets SA" \
-  gcloud iam service-accounts add-iam-policy-binding "${EXTERNAL_SECRETS_SA}" \
-    --project="${PROJECT_ID}" \
-    --member="serviceAccount:${RUNNER_SA}" \
-    --role="roles/iam.serviceAccountKeyAdmin" \
-    --impersonate-service-account="${RUNNER_SA}"; then
+# 5) Node SA must not have project-level artifactregistry.reader.
+#    The live grant is repository IAM in modules/artifact-registry.
+if ! expect_no_project_role \
+  "5. ${APP_NAME}-gke-${ENV}-node-sa has no project-level artifactregistry.reader" \
+  "serviceAccount:${NODE_SA}" \
+  "roles/artifactregistry.reader"; then
   failures=$((failures + 1))
 fi
 
 echo ""
 if [ "${failures}" -eq 0 ]; then
-  echo "All negative IAM tests denied as expected."
+  echo "All negative IAM tests matched expectations."
   exit 0
 fi
-echo "${failures} negative IAM test(s) did not deny as expected."
+echo "${failures} negative IAM test(s) did not match expectations."
 exit 1

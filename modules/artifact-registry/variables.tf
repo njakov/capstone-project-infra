@@ -12,3 +12,13 @@ variable "repository_id" {
   description = "The name of the repository (e.g., petclinic-repo)"
   type        = string
 }
+
+variable "writer_member" {
+  description = "IAM member granted roles/artifactregistry.writer on this repository (for example serviceAccount:github-app-runner-sa-dev@project.iam.gserviceaccount.com)."
+  type        = string
+}
+
+variable "reader_member" {
+  description = "IAM member granted roles/artifactregistry.reader on this repository (for example serviceAccount:petclinic-gke-dev-node-sa@project.iam.gserviceaccount.com)."
+  type        = string
+}

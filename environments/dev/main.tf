@@ -88,6 +88,7 @@ module "cloud_sql" {
 
   network_name              = module.app_network.network_name
   app_service_account_email = local.app_sa_email
+  deletion_protection       = var.deletion_protection
 }
 
 # ------------------------------------------------------------------------------
@@ -110,22 +111,17 @@ module "gke" {
 
   subnet_ip_cidr_range = module.app_network.subnet_ip_cidr_range
 
-  additional_master_authorized_networks = [
-    {
-      display_name = "infra-runner-subnet"
-      cidr_block   = data.google_compute_subnetwork.infra_subnet.ip_cidr_range
-    }
-  ]
-
   min_node_count         = var.gke_min_nodes
   max_node_count         = var.gke_max_nodes
   machine_type           = var.gke_machine_type
   node_locations         = var.gke_node_locations
   maintenance_start_time = var.gke_maintenance_start_time
   master_ipv4_cidr_block = var.master_ipv4_cidr_block
+  deletion_protection    = var.deletion_protection
 
-  # Dedicated tainted pool for ARC ephemeral runners (Kaniko-friendly COS)
+  # Dedicated tainted pool for ARC ephemeral runners (Ubuntu for rootless BuildKit)
   enable_runner_node_pool = true
+  runner_image_type       = "UBUNTU_CONTAINERD"
   runner_machine_type     = var.gke_runner_machine_type
   runner_min_node_count   = var.gke_runner_min_nodes
   runner_max_node_count   = var.gke_runner_max_nodes
@@ -147,6 +143,8 @@ module "artifact_registry" {
   project_id    = var.project_id
   region        = var.region
   repository_id = "${var.app_name}-repo-${var.env}"
+  writer_member = "serviceAccount:${local.app_runner_sa_email}"
+  reader_member = "serviceAccount:${local.node_sa_email}"
 }
 
 # ------------------------------------------------------------------------------
@@ -180,6 +178,12 @@ module "arc" {
   install_charts                = var.arc_install_charts
   min_runners                   = var.arc_min_runners
   max_runners                   = var.arc_max_runners
+  https_egress_except_cidrs = [
+    var.subnet_cidr,
+    var.pods_cidr,
+    var.services_cidr,
+    data.google_compute_subnetwork.infra_subnet.ip_cidr_range,
+  ]
 }
 
 # ------------------------------------------------------------------------------

@@ -96,6 +96,16 @@ variable "runner_tolerations" {
   ]
 }
 
+variable "https_egress_except_cidrs" {
+  type        = list(string)
+  description = "Private CIDRs removed from ARC TCP/443 and TCP/6443 egress (app subnet, pod and service ranges, infra runner subnet). Do not include the GKE master CIDR; kubectl uses TCP/443 there. Public 443 (GitHub, Artifact Registry, Google APIs) stays allowed."
+
+  validation {
+    condition     = length(var.https_egress_except_cidrs) > 0
+    error_message = "https_egress_except_cidrs must list the private ranges ARC pods must not reach on 443."
+  }
+}
+
 variable "install_charts" {
   type        = bool
   description = "Install ARC Helm releases and NetworkPolicies. Set false on first apply to create Secret Manager shells and the arc-runners namespace. Flip true only after ExternalSecret arc-github-app is Ready."
