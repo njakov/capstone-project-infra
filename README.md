@@ -10,11 +10,9 @@ Here, you can find the code for:
 * Creating Self-Hosted GitHub Actions Runners (infra GCE + ARC foundation)
 * Dev & Production Environment Provisioning (**one GCP project per env**)
 * Custom Modules Repository
-* Architecture Diagram
 * Architecture Decision Records ([docs/adr](docs/adr/))
 
 For more details, please refer to:
-* [Capstone Project Description ](.github/assets/Capstone%20advanced%20k8s%20project.pdf)
 * [Spring-Petclinic App Repository](https://github.com/njakov/capstone-project-app)
 * [ADR 001: Runner isolation](docs/adr/001-runner-isolation.md)
 * [Monitoring scrape path](docs/monitoring.md)
@@ -29,15 +27,6 @@ For more details, please refer to:
 * **CI/CD:** GitHub Actions — infra on GCE runners (`self-hosted,infra,{env}`); app CI on ARC (ephemeral) after cutover
 * **Configuration Management:** Helm 
 * **Monitoring:** Prometheus & Grafana (via Helm) 
-
-## Project Demo
-![Project Demo](./.github/assets/monitoring.gif) 
-
-### Production
-![Production](./.github/assets/prod.png)
-### Development
-![Development](./.github/assets/dev.png)
----
 
 ## Repository Structure
 
@@ -55,6 +44,7 @@ For more details, please refer to:
 │   ├── artifact-registry/   # Docker container storage
 │   ├── bootstrap-iam/       # Workload SAs + project IAM + D6 grants
 │   ├── cloud-sql/           # Managed MySQL database
+│   ├── external-secrets/    # External Secrets (ARC GitHub App)
 │   ├── gke/                 # Kubernetes Cluster configuration
 │   ├── identity/            # Workload Identity only (no project IAM)
 │   ├── middleware/          # Helm charts (Ingress, Prometheus)
@@ -69,7 +59,7 @@ For more details, please refer to:
 
 Bootstrap is **chicken-egg only**: infra VPC + NAT + IAP SSH + runner SA/VM + workload SAs/project IAM. The **env** apply creates the app VPC, both peering legs, then GKE/SQL/middleware. Isolation is a **project boundary** (dev ≠ prod GCP project), not IAM Conditions on `container.admin`.
 
-See [ADR 001: Runner isolation](docs/adr/001-runner-isolation.md) for locked decisions, residuals, sizing, and trial runtime. Regenerate [`.github/assets/architecture-diagram.png`](.github/assets/architecture-diagram.png) after cutover to match this layout.
+See [ADR 001: Runner isolation](docs/adr/001-runner-isolation.md) for locked decisions, residuals, sizing, and trial runtime. The old architecture figure was archived and is not the current layout.
 
 ### Key Components
 1.  **Network (`modules/network` + `modules/network-peering`):**
@@ -89,10 +79,6 @@ See [ADR 001: Runner isolation](docs/adr/001-runner-isolation.md) for locked dec
     * **`terraform-sa`:** conditioned `projectIamAdmin` binder for bootstrap only; **disabled** after bootstrap (`scripts/lock-terraform-sa.sh`). No project-level `serviceAccountUser`; state bucket is `storage.objectAdmin` only.
     * **`github-infra-runner-sa-{env}`:** day-2 apply identity — workload `*admin` + `networkAdmin` inside its project; **no** `projectIamAdmin` / project SA admin/user. Resource-level D6 grants from bootstrap are `infraRunnerWorkloadIdentityAdmin` on the app, app-runner, and external-secrets accounts. The condition is `hasOnly(['roles/iam.workloadIdentityUser'])`, so `setIamPolicy` may only change that role and `getIamPolicy` stays allowed. The node SA grant is `serviceAccountUser`.
     * **Secret Manager:** Centralized management for DB credentials and URLs (infra runner has `secretmanager.admin` by design).
-
-## Architecture Diagram
-![Architecture Diagram](./.github/assets/architecture-diagram.png)
-
 
 ## Getting Started
 
@@ -237,9 +223,6 @@ Infra apply runs only through **`infra-pipeline.yml`** on runners labeled `self-
 
 Application build/release/deploy workflows live in the **[capstone-project-app](https://github.com/njakov/capstone-project-app)** repository (not this repo). After ARC cutover they target scale set names such as `petclinic-arc-dev` / `petclinic-arc-prod`.
 
-### Google Cloud Platform 
-![GCP](./.github/assets/gke.png)
-
 ### Application Deployment Pipelines (app repo)
 
 | Workflow | Trigger | Description |
@@ -274,8 +257,6 @@ The modules/middleware module installs essential shared services into the cluste
 **App scrape path (primary):** Prometheus scrapes Spring Actuator `/actuator/prometheus` on the PetClinic Service port `http-web` (→ container `8080`). The JMX agent on container `:9093` is optional/local only and is **not** a cluster scrape target. Full walkthrough, Grafana password notes, and Gate H demo steps: [docs/monitoring.md](docs/monitoring.md).
 
 **Grafana admin:** if `grafana_admin_password` is unset, the chart default is `admin` / `prom-operator`. Prefer a one-time secret via `TF_VAR_grafana_admin_password` (do not commit).
-
-![Monitoring](./.github/assets/monitoring-alerts.gif) 
 
 Important Notes
 ------------------
