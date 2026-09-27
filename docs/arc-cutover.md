@@ -162,7 +162,7 @@ After ARC is green on an environment **and** app workflows no longer use the old
 
 1. Remove the old GitHub runner registration for `runner-vm-{env}` (if still present).
 2. Destroy leftover VMs only if bootstrap no longer manages them (confirm state).
-3. Regenerate [`.github/assets/architecture-diagram.png`](../.github/assets/architecture-diagram.png) to match infra VPC + ARC.
+3. The old architecture figure was archived and is not the current layout.
 
 ---
 
